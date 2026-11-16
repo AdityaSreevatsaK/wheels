@@ -139,7 +139,7 @@ def human_page(by_project: dict[str, list[dict]]) -> str:
         <li>Built twice, in two separate GitHub Actions runs. It only goes up if the two builds come out byte for byte the same.</li>
         <li>Tagged for the one Python and platform it was built and tested on, nothing wider. It can't rely on a DLL your machine might not have.</li>
         <li>Installed and imported on a fresh machine before it goes up. On free-threaded Python the GIL has to stay off. This checks that it works, it's not a security check.</li>
-        <li>pip checks each file's hash when it downloads it. You can also check where a file came from with <code>gh attestation verify FILE.whl -R wheelgap/tracker</code>.</li>
+        <li>pip checks each file's hash when it downloads it. You can also check where a file came from with <code>gh attestation verify FILE.whl -R wheelgap/wheels</code>.</li>
         <li>Every wheel, its source hash and both of its build runs are listed in <a href="data/gap-wheels.json">gap-wheels.json</a>.</li>
       </ul>
       <p>One thing to know: a wheel here is only as safe as the source it was built from. Installing the package the normal way runs the same code. Only packages with an OSI-approved licence (or the PSF licence Python uses) go up. Windows only for now, Linux needs more work first.</p>

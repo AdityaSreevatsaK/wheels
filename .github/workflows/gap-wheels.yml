@@ -217,7 +217,7 @@ jobs:
         run: |
           if [ "$(find release -maxdepth 1 -name '*.whl' | wc -l)" != 0 ]; then
             gh release view gap-wheels >/dev/null 2>&1 || gh release create gap-wheels --prerelease --title "Gap wheels" \
-              --notes "Wheels PyPI is missing, each built twice from PyPI's sdist and published only when both builds match. Index and details: https://wheelgap.github.io/tracker/wheels/"
+              --notes "Wheels PyPI is missing, each built twice from PyPI's sdist and published only when both builds match. Index and details: https://wheelgap.github.io/wheels/"
             # Upload before the index names them, so the index never links a missing file.
             gh release upload gap-wheels release/*.whl --clobber
           fi
