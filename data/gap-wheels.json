@@ -2,6 +2,25 @@
  "schema": 1,
  "wheels": [
   {
+   "name": "cchardet",
+   "version": "2.4.1",
+   "target": "3.14 musl-aarch64",
+   "wheel": "cchardet-2.4.1-cp314-cp314-musllinux_1_2_aarch64.whl",
+   "sha256": "7d1e1c69fbfd7665886f2122b1dc78dfda1f36e2a02175e123b9731a4046e5ec",
+   "sdist": "cchardet-2.4.1.tar.gz",
+   "sdist_sha256": "3e3b0b9f11f24b66dc34997035e4d9c570594277e59c878ef004f666b3f45124",
+   "builds": [
+    "https://github.com/wheelgap/wheels/actions/runs/44076355558",
+    "https://github.com/wheelgap/wheels/actions/runs/44076366414"
+   ],
+   "licence": "MPL-1.1 OR GPL-2.0-or-later OR LGPL-2.1-or-later",
+   "requires_python": ">=3.11",
+   "verified": "2026-11-17",
+   "batch": "https://github.com/wheelgap/wheels/actions/runs/44076251947",
+   "published": "2026-11-17",
+   "publish_run": "https://github.com/wheelgap/wheels/actions/runs/44076251947"
+  },
+  {
    "name": "fastuuid",
    "version": "0.14.0",
    "target": "3.14 win-arm64",
@@ -42,6 +61,44 @@
   {
    "name": "lz4",
    "version": "4.4.5",
+   "target": "3.14 musl-aarch64",
+   "wheel": "lz4-4.4.5-cp314-cp314-musllinux_1_2_aarch64.whl",
+   "sha256": "bd5a5d0e8a47be86c2003b3d5b873ef3d1101816d52c6265bcf80cc5e66dc9da",
+   "sdist": "lz4-4.4.5.tar.gz",
+   "sdist_sha256": "5f0b9e53c1e82e88c10d7c180069363980136b9d7a8306c4dca4f760d60c39f0",
+   "builds": [
+    "https://github.com/wheelgap/wheels/actions/runs/44076747211",
+    "https://github.com/wheelgap/wheels/actions/runs/44076915604"
+   ],
+   "licence": "BSD License",
+   "requires_python": ">=3.9",
+   "verified": "2026-11-17",
+   "batch": "https://github.com/wheelgap/wheels/actions/runs/44076251947",
+   "published": "2026-11-17",
+   "publish_run": "https://github.com/wheelgap/wheels/actions/runs/44076251947"
+  },
+  {
+   "name": "lz4",
+   "version": "4.4.5",
+   "target": "3.14t linux-x86_64",
+   "wheel": "lz4-4.4.5-cp314-cp314t-manylinux_2_28_x86_64.whl",
+   "sha256": "2eb3256b2691ded82ad2b5d2708d8f297e9047482ee460d43411310cc4817911",
+   "sdist": "lz4-4.4.5.tar.gz",
+   "sdist_sha256": "5f0b9e53c1e82e88c10d7c180069363980136b9d7a8306c4dca4f760d60c39f0",
+   "builds": [
+    "https://github.com/wheelgap/wheels/actions/runs/44076927132",
+    "https://github.com/wheelgap/wheels/actions/runs/44076937774"
+   ],
+   "licence": "BSD License",
+   "requires_python": ">=3.9",
+   "verified": "2026-11-17",
+   "batch": "https://github.com/wheelgap/wheels/actions/runs/44076251947",
+   "published": "2026-11-17",
+   "publish_run": "https://github.com/wheelgap/wheels/actions/runs/44076251947"
+  },
+  {
+   "name": "lz4",
+   "version": "4.4.5",
    "target": "3.14t win-arm64",
    "wheel": "lz4-4.4.5-cp314-cp314t-win_arm64.whl",
    "sha256": "073490d3860dfd1c424ee8ee99e8b37ffe6581bf2e55427329c360daad543485",
@@ -57,6 +114,44 @@
    "batch": "https://github.com/wheelgap/tracker/actions/runs/43876448691",
    "published": "2026-11-16",
    "publish_run": "https://github.com/wheelgap/tracker/actions/runs/43876448691"
+  },
+  {
+   "name": "matplotlib",
+   "version": "3.11.2",
+   "target": "3.14 musl-aarch64",
+   "wheel": "matplotlib-3.11.2-cp314-cp314-musllinux_1_2_aarch64.whl",
+   "sha256": "551449ae35e2c085df68c556e969e3adfa13e83180c33721fbfbf97dcae9d4cd",
+   "sdist": "matplotlib-3.11.2.tar.gz",
+   "sdist_sha256": "cec596316640f2b394b8f0daa0ea61a8eae82d017b620b9f202befb972a59ea4",
+   "builds": [
+    "https://github.com/wheelgap/wheels/actions/runs/44077123218",
+    "https://github.com/wheelgap/wheels/actions/runs/44077134355"
+   ],
+   "licence": "Python Software Foundation License",
+   "requires_python": ">=3.11",
+   "verified": "2026-11-17",
+   "batch": "https://github.com/wheelgap/wheels/actions/runs/44076251947",
+   "published": "2026-11-17",
+   "publish_run": "https://github.com/wheelgap/wheels/actions/runs/44076251947"
+  },
+  {
+   "name": "ml-dtypes",
+   "version": "0.6.0",
+   "target": "3.14 musl-aarch64",
+   "wheel": "ml_dtypes-0.6.0-cp314-cp314-musllinux_1_2_aarch64.whl",
+   "sha256": "84b1f4e995261657f683415adf1e8d211a1da2638ca0be13b43a0fc55dff93db",
+   "sdist": "ml_dtypes-0.6.0.tar.gz",
+   "sdist_sha256": "5e60251d32ced5598972e4d5e06a2f044341f9291402551a3f6f0ec44f9299b0",
+   "builds": [
+    "https://github.com/wheelgap/wheels/actions/runs/44077145202",
+    "https://github.com/wheelgap/wheels/actions/runs/44077156298"
+   ],
+   "licence": "Apache-2.0",
+   "requires_python": ">=3.10",
+   "verified": "2026-11-17",
+   "batch": "https://github.com/wheelgap/wheels/actions/runs/44076251947",
+   "published": "2026-11-17",
+   "publish_run": "https://github.com/wheelgap/wheels/actions/runs/44076251947"
   },
   {
    "name": "ormsgpack",
@@ -116,6 +211,25 @@
    "publish_run": "https://github.com/wheelgap/tracker/actions/runs/43876448691"
   },
   {
+   "name": "pymongo",
+   "version": "4.20.0",
+   "target": "3.14 musl-aarch64",
+   "wheel": "pymongo-4.20.0-cp314-cp314-musllinux_1_2_aarch64.whl",
+   "sha256": "26d6dc57951633000aa059e9e6efd2531d51d4a4701fc6478b4fcad473482d68",
+   "sdist": "pymongo-4.20.0.tar.gz",
+   "sdist_sha256": "f773b0aec28687587cdeda490463a82debc4566a4a3620dcc8dada9d2c0a1acd",
+   "builds": [
+    "https://github.com/wheelgap/wheels/actions/runs/44077441862",
+    "https://github.com/wheelgap/wheels/actions/runs/44077454104"
+   ],
+   "licence": "Apache-2.0",
+   "requires_python": ">=3.11",
+   "verified": "2026-11-17",
+   "batch": "https://github.com/wheelgap/wheels/actions/runs/44076251947",
+   "published": "2026-11-17",
+   "publish_run": "https://github.com/wheelgap/wheels/actions/runs/44076251947"
+  },
+  {
    "name": "rpds-py",
    "version": "2026.9.1",
    "target": "3.14t win-arm64",
@@ -133,6 +247,25 @@
    "batch": "https://github.com/wheelgap/tracker/actions/runs/43876448691",
    "published": "2026-11-16",
    "publish_run": "https://github.com/wheelgap/tracker/actions/runs/43876448691"
+  },
+  {
+   "name": "safetensors",
+   "version": "0.8.0",
+   "target": "3.14t linux-x86_64",
+   "wheel": "safetensors-0.8.0-cp314-cp314t-manylinux_2_28_x86_64.whl",
+   "sha256": "653d503727a2e2bd45c96c7974c260f10cdf94c4f635473aaf962e6e2dcc2bf7",
+   "sdist": "safetensors-0.8.0.tar.gz",
+   "sdist_sha256": "fabaf3e0f18a6618d9b36560682562157f77c2b71fcffc7b432be2baed9d753d",
+   "builds": [
+    "https://github.com/wheelgap/wheels/actions/runs/44077492055",
+    "https://github.com/wheelgap/wheels/actions/runs/44077504452"
+   ],
+   "licence": "Apache Software License",
+   "requires_python": ">=3.10",
+   "verified": "2026-11-17",
+   "batch": "https://github.com/wheelgap/wheels/actions/runs/44076251947",
+   "published": "2026-11-17",
+   "publish_run": "https://github.com/wheelgap/wheels/actions/runs/44076251947"
   },
   {
    "name": "safetensors",
@@ -192,6 +325,44 @@
    "publish_run": "https://github.com/wheelgap/tracker/actions/runs/43894336463"
   },
   {
+   "name": "statsmodels",
+   "version": "0.15.0",
+   "target": "3.14 musl-aarch64",
+   "wheel": "statsmodels-0.15.0-cp314-cp314-musllinux_1_2_aarch64.whl",
+   "sha256": "5c5151e6042d3d3f5c5387d86bf758e00641aa682f66a7a437efdabd3be63aec",
+   "sdist": "statsmodels-0.15.0.tar.gz",
+   "sdist_sha256": "5d257fe58d0772bc46a557880ca78e2a8e07fec7bfd9d11074aef8e33e1aecbc",
+   "builds": [
+    "https://github.com/wheelgap/wheels/actions/runs/44077773857",
+    "https://github.com/wheelgap/wheels/actions/runs/44077786460"
+   ],
+   "licence": "BSD-3-Clause",
+   "requires_python": ">=3.10",
+   "verified": "2026-11-17",
+   "batch": "https://github.com/wheelgap/wheels/actions/runs/44076251947",
+   "published": "2026-11-17",
+   "publish_run": "https://github.com/wheelgap/wheels/actions/runs/44076251947"
+  },
+  {
+   "name": "thrift",
+   "version": "0.25.0",
+   "target": "3.14t linux-x86_64",
+   "wheel": "thrift-0.25.0-cp314-cp314t-manylinux_2_28_x86_64.whl",
+   "sha256": "2781d1c8aedd52c530caad54b9100650fbe2a734a74aff23d5c542b2e0dc79b9",
+   "sdist": "thrift-0.25.0.tar.gz",
+   "sdist_sha256": "e85615ae9245f5622a5e36a9d2d867e1e7b17a8ca467b257dece5dc1642ccd73",
+   "builds": [
+    "https://github.com/wheelgap/wheels/actions/runs/44077799575",
+    "https://github.com/wheelgap/wheels/actions/runs/44077967842"
+   ],
+   "licence": "Apache-2.0",
+   "requires_python": null,
+   "verified": "2026-11-17",
+   "batch": "https://github.com/wheelgap/wheels/actions/runs/44076251947",
+   "published": "2026-11-17",
+   "publish_run": "https://github.com/wheelgap/wheels/actions/runs/44076251947"
+  },
+  {
    "name": "tokenizers",
    "version": "0.23.3",
    "target": "3.14t win-arm64",
@@ -209,6 +380,63 @@
    "batch": "https://github.com/wheelgap/tracker/actions/runs/43876448691",
    "published": "2026-11-16",
    "publish_run": "https://github.com/wheelgap/tracker/actions/runs/43876448691"
+  },
+  {
+   "name": "tree-sitter",
+   "version": "0.26.1",
+   "target": "3.14 musl-aarch64",
+   "wheel": "tree_sitter-0.26.1-cp314-cp314-musllinux_1_2_aarch64.whl",
+   "sha256": "24901281acc3cbca618ee54994ae533a513e6191d345f191efad2927171bd47b",
+   "sdist": "tree_sitter-0.26.1.tar.gz",
+   "sdist_sha256": "9919cbaf02d17fa9a4cd0e6da496aecf901b758e6eacf122eee393e3ef08aacd",
+   "builds": [
+    "https://github.com/wheelgap/wheels/actions/runs/44078239395",
+    "https://github.com/wheelgap/wheels/actions/runs/44078559328"
+   ],
+   "licence": "MIT License",
+   "requires_python": ">=3.10",
+   "verified": "2026-11-17",
+   "batch": "https://github.com/wheelgap/wheels/actions/runs/44076251947",
+   "published": "2026-11-17",
+   "publish_run": "https://github.com/wheelgap/wheels/actions/runs/44076251947"
+  },
+  {
+   "name": "zope-interface",
+   "version": "8.7",
+   "target": "3.14 musl-aarch64",
+   "wheel": "zope_interface-8.7-cp314-cp314-musllinux_1_2_aarch64.whl",
+   "sha256": "b7ddf3531d4ca42d857f95329e5bf807f400d1eff328f10ec53e6df91601c697",
+   "sdist": "zope_interface-8.7.tar.gz",
+   "sdist_sha256": "0b47b62e8d0d99b24bcdd32f4f2120425e5019c3bee2ad69a0e1d75737487a96",
+   "builds": [
+    "https://github.com/wheelgap/wheels/actions/runs/44078571406",
+    "https://github.com/wheelgap/wheels/actions/runs/44078584376"
+   ],
+   "licence": "ZPL-2.1",
+   "requires_python": ">=3.11",
+   "verified": "2026-11-17",
+   "batch": "https://github.com/wheelgap/wheels/actions/runs/44076251947",
+   "published": "2026-11-17",
+   "publish_run": "https://github.com/wheelgap/wheels/actions/runs/44076251947"
+  },
+  {
+   "name": "zstandard",
+   "version": "0.25.0",
+   "target": "3.14t linux-x86_64",
+   "wheel": "zstandard-0.25.0-cp314-cp314t-manylinux_2_28_x86_64.whl",
+   "sha256": "d180f9b9ae91c96672431a772a9e330bf85e6b9010fd497174a17c757a7cbfc0",
+   "sdist": "zstandard-0.25.0.tar.gz",
+   "sdist_sha256": "7713e1179d162cf5c7906da876ec2ccb9c3a9dcbdffef0cc7f70c3667a205f0b",
+   "builds": [
+    "https://github.com/wheelgap/wheels/actions/runs/44078597954",
+    "https://github.com/wheelgap/wheels/actions/runs/44078612242"
+   ],
+   "licence": "BSD-3-Clause",
+   "requires_python": ">=3.9",
+   "verified": "2026-11-17",
+   "batch": "https://github.com/wheelgap/wheels/actions/runs/44076251947",
+   "published": "2026-11-17",
+   "publish_run": "https://github.com/wheelgap/wheels/actions/runs/44076251947"
   },
   {
    "name": "zstandard",
