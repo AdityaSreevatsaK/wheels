@@ -59,6 +59,44 @@
    "publish_run": "https://github.com/wheelgap/tracker/actions/runs/43876448691"
   },
   {
+   "name": "lightgbm",
+   "version": "4.7.0",
+   "target": "3.14 musl-aarch64",
+   "wheel": "lightgbm-4.7.0-cp314-cp314-musllinux_1_2_aarch64.whl",
+   "sha256": "28bc0e69f9033b350804da94d0649faa50af51e4c7704665f848723372a91203",
+   "sdist": "lightgbm-4.7.0.tar.gz",
+   "sdist_sha256": "f8e20f682c9aabd000bcf4a7ed8aa6f473c1adfecccae34ec24e823d156f4af0",
+   "builds": [
+    "https://github.com/wheelgap/wheels/actions/runs/44098185911",
+    "https://github.com/wheelgap/wheels/actions/runs/44098198084"
+   ],
+   "licence": "MIT",
+   "requires_python": ">=3.10",
+   "verified": "2026-11-17",
+   "batch": "https://github.com/wheelgap/wheels/actions/runs/44098125669",
+   "published": "2026-11-17",
+   "publish_run": "https://github.com/wheelgap/wheels/actions/runs/44098125669"
+  },
+  {
+   "name": "lightgbm",
+   "version": "4.7.0",
+   "target": "3.14 win-arm64",
+   "wheel": "lightgbm-4.7.0-cp314-cp314-win_arm64.whl",
+   "sha256": "5f433606f910ecc896272a4466a20521f9342f01a83b0d9127d78236fa61978a",
+   "sdist": "lightgbm-4.7.0.tar.gz",
+   "sdist_sha256": "f8e20f682c9aabd000bcf4a7ed8aa6f473c1adfecccae34ec24e823d156f4af0",
+   "builds": [
+    "https://github.com/wheelgap/wheels/actions/runs/44098212396",
+    "https://github.com/wheelgap/wheels/actions/runs/44098227404"
+   ],
+   "licence": "MIT",
+   "requires_python": ">=3.10",
+   "verified": "2026-11-17",
+   "batch": "https://github.com/wheelgap/wheels/actions/runs/44098125669",
+   "published": "2026-11-17",
+   "publish_run": "https://github.com/wheelgap/wheels/actions/runs/44098125669"
+  },
+  {
    "name": "lz4",
    "version": "4.4.5",
    "target": "3.14 musl-aarch64",
