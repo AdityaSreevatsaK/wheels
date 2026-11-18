@@ -1416,11 +1416,14 @@ class Repair(unittest.TestCase):
     def test_the_repaired_wheel_with_pinned_tools_and_a_fixed_epoch(self):
         run, calls = self.fake_run()
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(gap_wheels.subprocess, "run", run):
-            got = gap_wheels.repair(Path(tmp) / "x-1.0-cp314-cp314-linux_x86_64.whl", Path(tmp))
+            py = Path(tmp) / "repair-venv" / "bin" / "python"
+            py.parent.mkdir(parents=True)
+            (py.parent / "auditwheel").touch()
+            got = gap_wheels.repair(Path(tmp) / "x-1.0-cp314-cp314-linux_x86_64.whl",
+                                    Path(tmp), locked_python=py)
             self.assertEqual(got.name, "x-1.0-cp314-cp314-manylinux_2_39_x86_64.whl")
-        install = next(c for c in calls if "install" in c)
-        self.assertTrue(all(t in install for t in gap_wheels.REPAIR_TOOLS))
-        self.assertTrue(all("==" in t for t in gap_wheels.REPAIR_TOOLS))  # pinned
+        self.assertFalse(any("install" in c for c in calls))
+        self.assertTrue(all("==" in t for t in gap_wheels.REPAIR_TOOLS))  # pinned by coordinator
 
     def test_no_wheel_or_two_wheels_or_a_failure_is_none(self):
         for exit_code, writes in ((1, ("x-1.0-cp314-cp314-manylinux_2_39_x86_64.whl",)), (0, ()),
@@ -1428,7 +1431,11 @@ class Repair(unittest.TestCase):
             with self.subTest(exit_code=exit_code, writes=writes):
                 run, _ = self.fake_run(exit_code, writes)
                 with tempfile.TemporaryDirectory() as tmp, mock.patch.object(gap_wheels.subprocess, "run", run):
-                    self.assertIsNone(gap_wheels.repair(Path(tmp) / "x.whl", Path(tmp)))
+                    py = Path(tmp) / "repair-venv" / "bin" / "python"
+                    py.parent.mkdir(parents=True)
+                    (py.parent / "auditwheel").touch()
+                    self.assertIsNone(gap_wheels.repair(Path(tmp) / "x.whl", Path(tmp),
+                                                        locked_python=py))
 
 
 
@@ -1445,7 +1452,11 @@ class RepairPlatform(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(gap_wheels.subprocess, "run", run):
-            got = gap_wheels.repair(Path(tmp) / "x.whl", Path(tmp), "manylinux_2_28_x86_64")
+            py = Path(tmp) / "repair-venv" / "bin" / "python"
+            py.parent.mkdir(parents=True)
+            (py.parent / "auditwheel").touch()
+            got = gap_wheels.repair(Path(tmp) / "x.whl", Path(tmp),
+                                    "manylinux_2_28_x86_64", locked_python=py)
             self.assertEqual(got.name, "x-1.0-cp314-cp314t-manylinux_2_28_x86_64.whl")
         repair = next(c for c in calls if "repair" in c)
         self.assertEqual(repair[repair.index("--plat") + 1], "manylinux_2_28_x86_64")
