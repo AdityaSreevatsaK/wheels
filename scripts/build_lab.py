@@ -30,7 +30,6 @@ Standard library only, so plan and merge never import third-party code.
 
 from __future__ import annotations
 
-
 import argparse
 import datetime as dt
 import json
