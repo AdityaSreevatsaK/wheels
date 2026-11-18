@@ -2114,7 +2114,7 @@ def trusted_staged(text: str) -> list[dict]:
 def cmd_publish(args: argparse.Namespace) -> int:
     """Copy the wheels to publish into RELEASE_DIR and add them to the index file; list in RELEASE_DIR/withdraw.txt
     the published wheels of projects that have since opted out (removed from the index here)."""
-    if args.staged_file:
+    if getattr(args, "staged_file", None):
         path = Path(args.staged_file)
         if (not args.staged_sha256 or not SHA256.fullmatch(args.staged_sha256)
                 or not path.is_file() or path.is_symlink()
