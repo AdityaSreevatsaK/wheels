@@ -69,6 +69,14 @@ class ReadSdist(unittest.TestCase):
 
 
 class Coordinator(unittest.TestCase):
+    def test_repair_pins_cannot_drift_from_the_coordinator_lock(self):
+        self.assertEqual(build_tool_lock.LINUX_REPAIR_TOOLS, gap_wheels.REPAIR_TOOLS)
+        win = gap_wheels.expected_repair_tools("3.14 win-arm64")
+        self.assertEqual({x["requirement"] for x in win},
+                         {*gap_wheels.WINDOWS_REPAIR_TOOLS, *gap_wheels.RETAG_TOOLS})
+        self.assertTrue(all(len(x["sha256"]) == 64 for x in win))
+        self.assertEqual(gap_wheels.expected_repair_tools("3.15 linux-x86_64"), [])
+
     def test_resolve_uses_wheels_only_and_checks_pypi_hash(self):
         source = project_zip()
         wheel = b"fixed wheel bytes"
