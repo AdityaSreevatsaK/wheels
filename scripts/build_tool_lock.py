@@ -30,6 +30,7 @@ PYPI = "https://pypi.org/pypi/"
 FILES = "https://files.pythonhosted.org/packages/"
 MAX_DOWNLOAD = 48_000_000
 MAX_PROJECT = 131_072
+PINNED_PIP = "pip==26.3"  # the builder itself must also be a hash-verified wheel
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 WHEEL = re.compile(r"[A-Za-z0-9._+!-]{1,200}\.whl\Z")
@@ -198,7 +199,7 @@ def resolve(pair: dict) -> dict:
     abi = f"cp{digits}{'t' if target.split()[0].endswith('t') else ''}"
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        (root / "requires.txt").write_text("\n".join(requirements) + "\n", encoding="utf-8")
+        (root / "requires.txt").write_text("\n".join([*requirements, PINNED_PIP]) + "\n", encoding="utf-8")
         cmd = [sys.executable, "-m", "pip", "--isolated", "download", "--index-url", "https://pypi.org/simple/",
                "--only-binary=:all:", "--no-cache-dir", "--disable-pip-version-check",
                "--python-version", python_version, "--implementation", "cp", "--abi", abi]
@@ -226,6 +227,8 @@ def resolve(pair: dict) -> dict:
             if hashlib.sha256(file.read_bytes()).hexdigest() != wheel_meta["sha256"]:
                 raise LockError("downloaded wheel SHA-256 mismatch")
             locked.append({"name": project, "version": ver, "filename": file.name, **wheel_meta})
+    if "pip" not in {w["name"] for w in locked}:
+        raise LockError("the pinned build pip was not resolved")
     result = {"schema": 1, "name": canonical(name), "version": version, "target": target,
               "sdist": sdists[0]["filename"], "sdist_url": meta["url"],
               "sdist_sha256": meta["sha256"], "wheels": sorted(locked, key=lambda x: x["name"])}
@@ -298,8 +301,10 @@ def create_build_environment(lock: dict, work: Path) -> tuple[Path, list[dict]]:
     installed = subprocess.run([str(py), "-m", "pip", "list", "--format=json"], capture_output=True,
                                text=True, timeout=40, check=True)
     got = {canonical(x["name"]): x["version"].lower() for x in json.loads(installed.stdout)}
+    if not any(w["name"] == "pip" and w["version"] == PINNED_PIP.split("==")[1] for w in lock["wheels"]):
+        raise LockError("build pip must be present at the pinned version")
     if any(got.get(w["name"]) != w["version"].lower() for w in lock["wheels"]):
         raise LockError("installed build requirements differ from the coordinator lock")
-    if any(n not in {w["name"] for w in lock["wheels"]} | {"pip", "setuptools"} for n in got):
+    if any(n not in {w["name"] for w in lock["wheels"]} | {"setuptools"} for n in got):
         raise LockError("unexpected build environment package")
     return py, lock["wheels"]
