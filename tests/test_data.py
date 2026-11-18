@@ -10,6 +10,7 @@ import copy
 import datetime as dt
 import json
 import re
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -127,6 +128,18 @@ class PublishedData(unittest.TestCase):
                          f"{REQUESTS.name}: one or more request entries were rejected")
         for project in raw:
             self.assertIn(build_gap_index.canonical(project), result, f"{project}: request was silently dropped")
+
+    def test_bad_request_handle_or_link_is_dropped_by_the_site_parser(self):
+        original = json.loads(REQUESTS.read_text(encoding="utf-8"))
+        project = next(iter(original))
+        for field, bad in (("by", "u/has space"), ("url", "https://evil.example/user")):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as folder:
+                damaged = copy.deepcopy(original)
+                damaged[project][field] = bad
+                copied = Path(folder) / "gap-wheel-requests.json"
+                copied.write_text(json.dumps(damaged), encoding="utf-8")
+                self.assertNotEqual(len(build_gap_index.read_requests(copied)), len(damaged),
+                                    f"{project}: invalid {field} was not rejected")
 
     def test_mutations_are_rejected_with_the_wheel_named(self):
         data = json.loads(WHEELS.read_text(encoding="utf-8"))
