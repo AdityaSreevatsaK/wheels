@@ -144,8 +144,17 @@ def cmd_plan(args: argparse.Namespace) -> int:
     start = dt.date.today().toordinal() // 7 * args.max if args.rotate else 0
     jobs = plan(builds, args.max, only, start)
     if args.lock_out:
-        jobs, bundle = build_tool_lock.lock_plan(jobs)
+        report: list[tuple[str, str]] = []
+        planned = len(jobs) // 2
+        jobs, bundle = build_tool_lock.lock_plan(jobs, report)
         Path(args.lock_out).write_text(json.dumps(bundle, sort_keys=True) + "\n", encoding="utf-8")
+        if getattr(args, "summary", None):
+            lines = [f"**{len(jobs) // 2} locked, {planned - len(jobs) // 2} skipped** of {planned} pairs",
+                     "", "| package / version / target | resolution |", "|---|---|"]
+            lines += [f"| {name.replace('|', '&#124;')} | {status.replace('|', '&#124;')} |"
+                      for name, status in report]
+            with open(args.summary, "a", encoding="utf-8") as stream:
+                stream.write("\n".join(lines) + "\n")
     hosted = [j for j in jobs if "image" not in j]
     docker = [j for j in jobs if "image" in j]
     print(f"{len(jobs) // 2} pairs, {len(jobs)} builds", file=sys.stderr)
@@ -2136,6 +2145,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--rotate", action="store_true", help="start further on each week (for the scheduled batch)")
     p.add_argument("--github-output")
     p.add_argument("--lock-out", help="coordinator-only build-tool lock bundle; skip unpinned pairs")
+    p.add_argument("--summary", help="append locked and skipped pairs to the GitHub step summary")
     p.set_defaults(func=cmd_plan)
     b = sub.add_parser("build")
     for flag in ("--name", "--version", "--target", "--runner", "--out"):
