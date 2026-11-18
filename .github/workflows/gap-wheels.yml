@@ -37,7 +37,7 @@ jobs:
     # Only from main: the build runs are started from main, and collect checks they ran this commit.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 35 # bounded worker pool and per-pair timeouts
     outputs:
       all: ${{ steps.plan.outputs.all }}
       since: ${{ steps.plan.outputs.since }}
@@ -46,6 +46,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.13.9"
+          enable-cache: false
       - id: plan
         env:
           # A weekly batch takes 60 pairs (120 builds, a few hours at 20 at a time), starting further on each week
@@ -61,7 +65,7 @@ jobs:
           # The batch is fixed here, so re-running only a later job still finds this batch's build runs.
           echo "batch=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
           echo "since=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-          python3 scripts/gap_wheels.py plan "$RUNNER_TEMP/builds.json" --max "$MAX" $rotate ${ONLY:+--only "$ONLY"} --lock-out "$RUNNER_TEMP/build-tool-locks.json" --github-output "$GITHUB_OUTPUT"
+          python3 scripts/gap_wheels.py plan "$RUNNER_TEMP/builds.json" --max "$MAX" $rotate ${ONLY:+--only "$ONLY"} --lock-out "$RUNNER_TEMP/build-tool-locks.json" --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"
 
       - name: Store the coordinator's immutable build-tool locks
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
