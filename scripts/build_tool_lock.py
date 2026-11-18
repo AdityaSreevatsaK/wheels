@@ -83,7 +83,7 @@ def _metadata(name: str, version: str) -> dict:
         raise LockError(f"cannot read PyPI release metadata: {exc}") from exc
 
 
-def _project_requirements(archive: bytes, filename: str) -> list[str]:
+def _project_requirements(archive: bytes, filename: str, target: str | None = None) -> list[str]:
     """Read only the one top-level pyproject.toml; never extract or execute archive members."""
     candidates = []
     try:
@@ -126,6 +126,19 @@ def _project_requirements(archive: bytes, filename: str) -> list[str]:
         if "build-backend" not in system and "wheel" not in reqs:
             # The specified requires use the defined legacy setuptools hook.
             reqs = [*reqs, "wheel"]
+        if target is not None:
+            # Known backend hooks can request these tools only after pip starts
+            # building. With --no-build-isolation --no-index, nothing would
+            # install them then. Resolve and hash-pin them in the coordinator.
+            # Unknown hooks continue to fail closed instead of fetching tools
+            # in the untrusted build environment.
+            backend = system.get("build-backend", "")
+            if backend == "scikit_build_core.build":
+                reqs = [*reqs, "cmake>=3.15", "ninja>=1.10"]
+            elif backend == "mesonpy":
+                reqs = [*reqs, "ninja>=1.8"]
+                if "linux-" in target or "musl-" in target:
+                    reqs.append("patchelf>=0.11")
         # These go into a pip requirements file: never allow an sdist to add index options,
         # includes, URLs or lines that change the resolver's trust boundary.
         if any(
@@ -317,7 +330,7 @@ def resolve(pair: dict) -> dict:
     archive = _from_pypi(meta["url"])
     if hashlib.sha256(archive).hexdigest() != meta["sha256"]:
         raise LockError("PyPI sdist SHA-256 mismatch")
-    requirements = _project_requirements(archive, sdists[0]["filename"])
+    requirements = _project_requirements(archive, sdists[0]["filename"], target)
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         locked = _resolve_wheels([*requirements, PINNED_PIP], target, root, "build")
