@@ -1,0 +1,76 @@
+name: Temporary no-publish locked build integration
+
+on:
+  push:
+    branches: [design/4-build-tool-provenance]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: "3.15 linux-x86_64"
+            py: "3.15"
+          - os: windows-2025
+            target: "3.15 win-amd64"
+            py: "3.15"
+          - os: windows-11-arm
+            target: "3.14 win-arm64"
+            py: "3.14"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.py }}
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.13.9"
+          enable-cache: false
+      - name: Resolve actual PyPI sdist and run isolated hash-locked backend build
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import tempfile
+          from pathlib import Path
+          from scripts import build_tool_lock, gap_wheels
+          target = os.environ["TARGET"]
+          pair = {"name": "lz4", "version": "4.4.5", "target": target}
+          lock = build_tool_lock.resolve(pair)
+          print("LOCK", json.dumps({"target": target, "digest": build_tool_lock.digest(lock),
+                                    "build": [x["name"] for x in lock["wheels"]],
+                                    "repair": [x["name"] for x in lock["repair_wheels"]]}))
+          with tempfile.TemporaryDirectory() as td:
+              work = Path(td)
+              bundle = work / "locks.json"
+              bundle.write_text(json.dumps({"schema": 1, "pairs": {"0": lock}}))
+              loaded = build_tool_lock.load_lock(bundle, "0", build_tool_lock.digest(lock), pair)
+              assert loaded == lock
+              spec = gap_wheels.build_lab.TARGETS[target]
+              result = gap_wheels.run_build(
+                  "lz4", "4.4.5", 2, work, plat=spec.get("plat"),
+                  tag=gap_wheels.PUBLISH_TAGS[target],
+                  platform_pattern=spec["wheel"],
+                  lock=loaded, lock_sha256=build_tool_lock.digest(loaded),
+              )
+              print("BUILD_RESULT", json.dumps(result, sort_keys=True))
+              assert result["wheel"] is not None, "No wheel produced with this target's locked tools"
+              assert gap_wheels.tool_provenance_valid(result["tools"])
+              if target.endswith("linux-x86_64"):
+                  assert result["tools"]["repair_packages"], "No hash-locked repair tool provenance"
+              else:
+                  assert result["tools"]["repair_packages"] == []
+          PY
