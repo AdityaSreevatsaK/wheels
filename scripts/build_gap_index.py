@@ -331,7 +331,10 @@ def human_page(
         )
         for n, w in enumerate(wheels):
             builds = [u for u in w.get("builds") or [] if isinstance(u, str) and u.startswith("https://github.com/")]
-            links = ", ".join(f'<a href="{e(u)}">build {n}</a>' for n, u in enumerate(builds, 1))
+            links = ", ".join(
+                f'<a href="{e(u)}" aria-label="build {i} of {e(w["wheel"])}">build {i}</a>'
+                for i, u in enumerate(builds, 1)
+            )
             anchor = f' id="{e(project)}"' if n == 0 else ""
             parsed = wheel_tags(w["wheel"])
             filename_version = (
@@ -350,16 +353,17 @@ def human_page(
                 f'          <tr{anchor}><td><a href="{e(TRACKER)}p/{e(project)}/">{e(w["name"])}</a>{note}</td>'
                 f"<td>{e(str(w.get('version', '')))}</td><td>{e(str(w.get('target', '')))}</td>"
                 f"<td>{e(str(w.get('verified') or ''))}</td><td>{links}</td>"
-                f'<td><a href="{e(RELEASE_URL + w["wheel"])}">wheel</a>'
+                f'<td><a href="{e(RELEASE_URL + w["wheel"])}" aria-label="wheel {e(w["wheel"])}">wheel</a>'
                 f'<br><small title="{e(w["sha256"])}">{e(w["sha256"][:12])}</small></td>'
                 f"<td>{install}</td>"
                 f"<td>{e(gone.get(w['wheel'], 'in the index'))}</td></tr>"
             )
     count = sum(len(v) for v in by_project.values()) - len(gone)
     table = (
-        '        <div class="matrix-scroll"><table class="matrix">\n'
-        "          <thead><tr><th>Package</th><th>Version</th><th>Target</th><th>Verified</th><th>Builds</th>"
-        "<th>File</th><th>Install</th><th>Status</th></tr></thead>\n"
+        '        <div class="matrix-scroll" tabindex="0" role="region" aria-labelledby="published-wheels"><table class="matrix">\n'
+        '          <thead><tr><th scope="col">Package</th><th scope="col">Version</th>'
+        '<th scope="col">Target</th><th scope="col">Verified</th><th scope="col">Builds</th>'
+        '<th scope="col">File</th><th scope="col">Install</th><th scope="col">Status</th></tr></thead>\n'
         "          <tbody>\n" + "\n".join(rows) + "\n          </tbody>\n"
         "        </table></div>\n"
         if rows
@@ -421,7 +425,7 @@ tokenizers = {{ index = "wheelgap" }}</code></pre>
       <p>These are meant as a stopgap until your release ships its own wheel. Once it does, ours drops out of the index within the hour, and the table below says so. If you'd rather we didn't host any wheels for your project, <a href="{e(OPT_OUT_URL)}">open an opt-out issue</a> and they come down, and later batches skip it. Each row below links to both build runs if you want to see the build that worked.</p>
     </section>
     <section>
-      <h2>Published wheels</h2>
+      <h2 id="published-wheels">Published wheels</h2>
 {table}    </section>
   </main>
 </body>
