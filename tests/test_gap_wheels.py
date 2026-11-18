@@ -441,6 +441,9 @@ class Dispatch(unittest.TestCase):
         self.plan = Path(self.tmp.name) / "plan.json"
         self.plan.write_text(json.dumps(self.jobs))
         self.locks = Path(self.tmp.name) / "locks.json"
+        self.locks.write_text(json.dumps({"schema": 1, "pairs": {
+            str(job["id"]): example_lock(job) for job in self.jobs
+        }}))
         self.calls = []
         sleep = mock.patch.object(gap_wheels.time, "sleep", lambda s: None)
         sleep.start()
