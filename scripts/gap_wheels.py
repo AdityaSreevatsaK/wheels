@@ -579,6 +579,45 @@ def wheel_problem(wheel: object, job: dict) -> str | None:
     return None
 
 
+
+def tool_provenance_valid(value: object) -> bool:
+    """The provenance schema required for every new, publishable wheel."""
+    if not isinstance(value, dict) or set(value) != {
+        "lock_sha256", "packages", "python", "python_build", "runner_image", "compiler"
+    }:
+        return False
+    if not (isinstance(value["lock_sha256"], str) and SHA256.fullmatch(value["lock_sha256"])
+            and isinstance(value["python"], str) and re.fullmatch(r"\d+\.\d+\.\d+", value["python"])
+            and isinstance(value["python_build"], str) and 0 < len(value["python_build"]) <= 500
+            and isinstance(value["runner_image"], str) and 0 < len(value["runner_image"]) <= 500):
+        return False
+    compiler = value["compiler"]
+    if not isinstance(compiler, dict) or set(compiler) != {"cc", "link"}:
+        return False
+    if not all(isinstance(c, str) and 0 < len(c) <= 500 for c in compiler.values()):
+        return False
+    pkgs = value["packages"]
+    if not isinstance(pkgs, list) or not 0 < len(pkgs) <= 100:
+        return False
+    names = set()
+    for p in pkgs:
+        if not isinstance(p, dict) or set(p) != {"name", "version", "filename", "sha256"}:
+            return False
+        if not (isinstance(p["name"], str) and build_tool_lock.NAME.fullmatch(p["name"])
+                and p["name"] not in names and isinstance(p["version"], str)
+                and 0 < len(p["version"]) <= 100 and isinstance(p["filename"], str)
+                and build_tool_lock.WHEEL.fullmatch(p["filename"])
+                and isinstance(p["sha256"], str) and SHA256.fullmatch(p["sha256"])):
+            return False
+        names.add(p["name"])
+    return True
+
+
+def expected_packages(lock: dict) -> list[dict]:
+    return [{"name": w["name"], "version": w["version"], "sha256": w["sha256"],
+             "filename": w["filename"]} for w in lock["wheels"]]
+
+
 def problems(result: object, job: dict) -> list[str]:
     """What's wrong with an untrusted result for `job` (empty when it's exactly what `build` writes for that job)."""
     if not isinstance(result, dict):
@@ -606,6 +645,10 @@ def problems(result: object, job: dict) -> list[str]:
         out.append("installs")
     if job["attempt"] == 2 and result["installs"] is not None:
         out.append("only the first build installs")
+    if not tool_provenance_valid(result["tools"]):
+        out.append("build tools are missing or invalid")
+    elif job.get("lock_sha256") and result["tools"]["lock_sha256"] != job["lock_sha256"]:
+        out.append("build tools do not match the planned lock")
     return out
 
 
@@ -636,6 +679,7 @@ def verify(
     results: dict[tuple[str, int], object],
     published: Callable[[str, str], dict[str, str] | None],
     members: dict[tuple[str, int], object] | None = None,
+    locks: dict | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """(verified wheels, every pair with its verdict) from the plan's jobs, the results by (id, attempt), and a lookup
     of PyPI's sdists for a release, {filename: sha256} or None if PyPI couldn't be asked. It's only asked about pairs
@@ -663,6 +707,16 @@ def verify(
             second["sdist_sha256"],
         ):
             verdict = "the two builds differ" + differing(members.get((pid, 1)), members.get((pid, 2)))
+        elif locks is not None and (
+            not isinstance(locks, dict)
+            or not build_tool_lock.validate(locks.get("pairs", {}).get(pid))
+            or build_tool_lock.digest(locks["pairs"][pid]) != job.get("lock_sha256")
+            or first["tools"]["packages"] != expected_packages(locks["pairs"][pid])
+            or second["tools"]["packages"] != expected_packages(locks["pairs"][pid])
+        ):
+            verdict = "the coordinator's build-tool lock does not match the builds"
+        elif first["tools"] != second["tools"]:
+            verdict = "the two builds used different toolchains"
         elif (sdists := published(job["name"], job["version"])) is None:
             verdict = "couldn't check the sdist against PyPI"
         elif sdists.get(first["sdist"]) != first["sdist_sha256"]:
@@ -672,7 +726,7 @@ def verify(
         else:
             verdict = "verified"
             verified.append({**row, "wheel": first["wheel"], "sha256": first["sha256"], "sdist": first["sdist"],
-                             "sdist_sha256": first["sdist_sha256"]})  # fmt: skip
+                             "sdist_sha256": first["sdist_sha256"], "tools": first["tools"]})  # fmt: skip
         report.append({**row, "verdict": verdict})
     return verified, report
 
@@ -717,7 +771,15 @@ def cmd_merge(args: argparse.Namespace) -> int:
                 members[(job["id"], job["attempt"])] = json.loads(mpath.read_text(encoding="utf-8"))
             except Exception:  # noqa: BLE001,S110  (untrusted diagnostics, e.g. nesting deep enough for RecursionError)
                 pass
-    verified, report = verify(jobs, results, pypi_sdists, members)
+    if not args.locks:
+        raise SystemExit("gap_wheels: merge requires the coordinator's immutable build-tool locks")
+    lock_path = Path(args.locks)
+    if not lock_path.is_file() or lock_path.stat().st_size > 4_000_000:
+        raise SystemExit("gap_wheels: missing or oversized build-tool lock bundle")
+    locks = json.loads(lock_path.read_text(encoding="utf-8"))
+    if not isinstance(locks, dict) or set(locks) != {"schema", "pairs"} or locks["schema"] != 1:
+        raise SystemExit("gap_wheels: invalid coordinator lock bundle")
+    verified, report = verify(jobs, results, pypi_sdists, members, locks)
     runs_file = Path(args.results) / "runs.json"
     if runs_file.is_file():  # written by collect, which is trusted
         urls = json.loads(runs_file.read_text(encoding="utf-8"))
@@ -1725,8 +1787,12 @@ def cmd_stage(args: argparse.Namespace) -> int:
         if reason is not None:
             continue
         (out / wheel["wheel"]).write_bytes(data)
+        if not tool_provenance_valid(wheel.get("tools")):
+            lines[-1] = f"| {wheel['name']} | {wheel['version']} | {wheel['target']} | no verified toolchain |"
+            (out / wheel["wheel"]).unlink(missing_ok=True)
+            continue
         staged.append({**{k: wheel[k] for k in ("name", "version", "target", "wheel", "sha256", "sdist",
-                                                "sdist_sha256", "builds")},
+                                                "sdist_sha256", "builds", "tools")},
                        "licence": stated, "requires_python": info.get("requires_python") or None,
                        "verified": manifest.get("date"), "batch": manifest.get("run")})  # fmt: skip
     (out / "staged.json").write_text(json.dumps(staged, indent=1) + "\n", encoding="utf-8")
@@ -1897,7 +1963,9 @@ def select(staged: list[dict], tested: dict[str, dict[str, bool]], folder: Path,
     for w in staged:
         name = w["wheel"]
         path = folder / name
-        if not path.is_file() or path.is_symlink() or sha256(path) != w["sha256"]:
+        if not tool_provenance_valid(w.get("tools")):
+            lines.append(f"{name}: no verified build-tool provenance; not published")
+        elif not path.is_file() or path.is_symlink() or sha256(path) != w["sha256"]:
             lines.append(f"{name}: the staged file isn't the verified one; not published")
         elif not tested.get(w["target"], {}).get(name):
             lines.append(f"{name}: didn't pass the install test on a fresh runner; not published")
@@ -1914,11 +1982,11 @@ def trusted_staged(text: str) -> list[dict]:
     """The staging job's `staged` output, checked for shape (it's ours, but a bad one must stop, not half-publish)."""
     staged = json.loads(text)
     keys = {"name", "version", "target", "wheel", "sha256", "sdist", "sdist_sha256", "builds", "licence",
-            "requires_python", "verified", "batch"}  # fmt: skip
+            "requires_python", "verified", "batch", "tools"}  # fmt: skip
     if not isinstance(staged, list) or not all(
         isinstance(w, dict) and set(w) == keys and isinstance(w["wheel"], str) and ASSET.fullmatch(w["wheel"])
         and isinstance(w["sha256"], str) and SHA256.fullmatch(w["sha256"]) and w["target"] in build_lab.TARGETS
-        and tag_ok(w["wheel"], w["target"])
+        and tag_ok(w["wheel"], w["target"]) and tool_provenance_valid(w["tools"])
         for w in staged
     ):
         raise SystemExit("gap_wheels: --staged-json isn't what stage writes")
@@ -1977,6 +2045,7 @@ def main(argv: list[str] | None = None) -> int:
     m = sub.add_parser("merge")
     m.add_argument("results")
     m.add_argument("--plan", required=True)
+    m.add_argument("--locks", required=True, help="trusted build-tool locks created before dispatch")
     m.add_argument("--out", required=True)
     m.add_argument("--summary")
     m.set_defaults(func=cmd_merge)
