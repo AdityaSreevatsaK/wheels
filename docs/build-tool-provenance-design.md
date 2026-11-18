@@ -1,93 +1,148 @@
-# Build-tool provenance implementation (issue #4)
+# Build-tool provenance and publication trust boundary
 
-**Status:** Implemented on branch `design/4-build-tool-provenance` in the contributor's fork.
-The production pipeline is unchanged upstream until maintainers review and merge the contribution.
-The new coordinator locks static PEP 517 dependencies (including pip 26.3), plus Linux repair tools and their
-transitive dependencies, and both build jobs use the same lock,
-and the trusted merge and publication paths reject missing or mismatched provenance.
+Gap wheels are built twice in independent, untrusted GitHub Actions runs. A
+wheel is eligible for publication only when both runs produce identical wheel
+bytes from the exact PyPI sdist, the toolchains match a coordinator-generated
+lock, the wheel passes the platform and licence checks, and a fresh installation
+test succeeds.
 
-## Previous boundary (before this change)
+This document explains what the mechanism verifies, where its trust boundaries
+are, and what it deliberately does not promise. The public overview is in
+[README.md](../README.md).
 
-`scripts/gap_wheels.py:plan` emits two jobs per (name, version, target). The trusted coordinator dispatches
-`.github/workflows/gap-wheel-build.yml` twice. In each untrusted build, `run_build` downloads the PyPI sdist and
-runs `pip wheel` with build isolation. PEP 517's build backend and its dependencies resolve separately on both jobs,
-without a frozen list of wheel bytes. `verify` compares the two output hashes and sdist hashes, but not the build
-backend or toolchain. `cmd_stage` and `cmd_publish` publish that verdict.
+## Coordinator: resolve inputs without executing an sdist
 
-Current pins for Linux images, Rust, `auditwheel` and `patchelf` are valuable, but do not pin PEP 517 build tools.
-Windows also floats to the current GitHub-hosted runner image and CPython patch release.
+The trusted `plan` job reads clean candidates from the tracker build lab.
+For each release/platform pair it:
 
-## Implemented fail-closed contract
+1. Downloads the exact PyPI sdist, verifies its published SHA-256 and reads
+   the sole top-level `pyproject.toml` as archive data. Nothing is extracted
+   or executed in the coordinator.
+2. Uses the defined setuptools legacy defaults when the build-system table
+   is absent. Otherwise reads static `build-system.requires`, rejecting
+   direct URLs, extra indexes, nested requirements and unsupported inputs.
+3. Resolves dependencies with **uv 0.13.9**, pinned in the workflow and
+   configured with the target's Python version and platform. This avoids
+   evaluating `sys_platform` and `platform_machine` on the coordinator's
+   Linux interpreter. Only wheel distributions may be selected.
+4. Downloads the exact pinned versions with `--no-deps` for the target's
+   ABI/platform. Every downloaded wheel must appear in its PyPI release
+   listing and match its published SHA-256.
+5. Independently resolves Linux repair tools (`auditwheel`, `patchelf`,
+   their dependencies and pip) into a **separate lock**. The build backend
+   never imports or executes from the repair tool environment.
 
-1. **One lock for each pair, before dispatch.** Add a trusted `lock-build-tools` step after planning. It downloads
-   the exact PyPI sdist as data, checks its PyPI SHA-256, and parses `pyproject.toml` without importing or executing
-   code from the sdist. Resolve `[build-system].requires` for the target's interpreter and platform from wheels
-   only; recursively freeze all installed build-time packages, including transitive requirements. Use one
-   version/filename/SHA-256 record per selected wheel. Backend hook requirements that cannot be established
-   without executing sdist code are *not guessed*: the pair is skipped until a safe locking mechanism exists.
-2. **Immutable transfer.** Store the pair's lock as a coordinator artifact with a content SHA-256. The dispatcher
-   passes only the coordinator run ID, pair ID and digest to both build runs. Each build fetches that one artifact
-   before executing the sdist, checks the digest, and reads only names, versions and hashed files from a bounded
-   schema. Reject missing or oversized locks, unknown package names, unexpected URLs and duplicate filenames.
-   The build's GitHub token remains read-only; never expose a coordinator write token to build steps.
-3. **Identical inputs, isolated installation.** Download the exact locked wheels, verify every SHA-256, and install
-   them into a fresh build venv without dependency resolution. Build with `pip wheel --no-build-isolation --no-deps`
-   using that venv's Python. If a PEP 517 hook asks for an undeclared requirement, fail the build, do not fall back
-   to ambient PyPI resolution. Verify the downloaded sdist hash again before unpacking or running its code.
-4. **Record the actual environment.** Each build's `result.json` names the lock digest and each wheel's name,
-   version and SHA-256, plus the exact `sys.version`, runner image identifier and platform-specific compiler
-   versions. On Windows, locate the MSVC compiler selected for the build and record both `cl.exe` and `link.exe`
-   versions, not just environment-variable guesses; retain the fact that GitHub-hosted Windows images themselves
-   cannot be pinned. Linux records its image digest and Rust version too.
-5. **Trusted comparison.** Extend `RESULT_KEYS`, `problems` and `verify` together. Both results must reference
-   the coordinator's exact lock and use identical build dependencies and relevant toolchain versions. Incomplete,
-   malformed, missing or inconsistent provenance means **rejected**, even if the two wheels have identical bytes.
-   Propagate validated provenance through manifest, staging and publication to `data/gap-wheels.json`. Keep legacy
-   index entries readable but do not permit new unpinned entries to be published. Bound the new JSON sizes.
-6. **Threat model.** Document that a matching pair under the same locked tools proves repeatability under those
-   inputs, not sdist trustworthiness, independent source reproduction or absence of malicious upstream code.
+The lock records the source filename, URL and hash, and for each of the two
+tool groups its package name, exact version, filename, PyPI URL and SHA-256.
+Its canonical JSON digest binds all of these fields.
 
-## Validation requirements and results (no real publish)
+A bounded four-worker pool resolves pairs. Unresolvable pairs are skipped,
+not dispatched. The step summary reports locked and skipped pairs, with
+reasons. A static lock cannot safely anticipate arbitrary
+`get_requires_for_build_wheel` hooks: if a backend requests a dependency that
+isn't installed, its isolated build fails without trying a public index.
+No source distribution is executed during resolution.
 
-- Lock resolution with mocked PyPI responses and a small trusted wheel set; exact version/hash matching.
-- Reject missing `pyproject.toml`, dynamic/unsupported backends, unsafe tar members and wheel-only resolution
-  failures without evaluating sdist code. Ensure no builder runs when the lock is absent.
-- Reject hash mismatch before package code executes; refuse ambient package resolution and unexpected extra tools.
-- Feed two otherwise identical fake wheels to `verify`; differing tool lock, Python patch version, MSVC version
-  or runner image must fail. Both matching locks and toolchains should verify.
-- Verify malformed, oversized and forged provenance is rejected in result, staging and publish paths.
-- Windows and Linux smoke runs that demonstrate the selected backend and wheel versions in both output records.
-- Confirm a workflow re-run with an unchanged coordinator lock never silently obtains newer build-backend files.
+## Dispatch: no extra permissions on untrusted builds
 
-## Implementation map
+The coordinator retains the complete trusted bundle. The trusted dispatcher
+checks each pair's lock against the planned digest and sends that *one pair's*
+compact, size-bounded lock as a workflow-dispatch input to each independent
+build. Build workflows retain **`contents: read` only**. They do not need
+`actions: read` or the coordinator's artifact token.
 
-- scripts/build_tool_lock.py: read a verified sdist as data, refuse unsupported PEP 517 inputs, resolve wheels
-  on PyPI, freeze their file hashes and install the exact backend and Linux repair environment offline.
-- scripts/gap_wheels.py: lock during plan, require the coordinator artifact on build, record interpreter,
-  compiler, linker and runner versions, compare both builds against the trusted lock, and pass verified
-  provenance through the manifest, staging and publishing.
-- .github/workflows/gap-wheels.yml and gap-wheel-build.yml: upload one coordinator lock artifact,
-  pass its digest and run ID to each independent build, and restore it for trusted verification.
-- scripts/container_build.sh: receive the same immutable lock inside the Linux target container.
-- tests/test_build_tool_lock.py and tests/test_gap_wheels.py: direct offline regression coverage.
+Both independent builds receive the same lock bytes and expected digest.
+Each refuses a missing, malformed or mismatched lock, including a lock for
+another project, release or platform. They re-download the PyPI sdist and
+the tool wheels, re-check each SHA-256 and install with `--no-deps`,
+`--no-index` and `--require-hashes` into clean virtual environments.
+The build itself runs with `--no-build-isolation --no-index`, so it cannot
+silently resolve additional backend requirements.
 
-**Verified in fork:** The existing tests and new security tests pass under CPython 3.14. A separate
-non-publishing Actions probe resolved real build requirements for lz4 and tiktoken, built and repaired lz4 from its
-verified source archive using only pinned build and repair tools, and installed coordinator-resolved
-tool wheels on both Windows x64 and Windows ARM. The temporary test workflows are removed from the final change.
+Linux repair occurs **after** the source build, from a separately locked
+repair venv. The Windows bundling and retagging tools remain individually
+version- and hash-pinned.
 
-**Limits:** A malicious sdist may execute arbitrary code during a build, as before. This lock ensures
-the tools pip deliberately installs for the PEP 517 build are hash-pinned; it is not a sandbox for
-sdist code or a guarantee of independent supply-chain provenance. Runner images on Windows still
-float; their exact versions must agree between the two builds. Dynamic PEP 517 requirements not
-satisfied by the static locked environment are not downloaded on demand: those builds fail closed.
+## Environment provenance
 
+Each result records:
 
-## Roll-out
+- The coordinator lock's SHA-256, all backend wheels and Linux repair wheels.
+- Exact Python patch and interpreter build strings.
+- The pinned Linux container digest or exact Windows runner image version.
+- Compiler and linker executable/version identifiers, plus the available
+  Rust compiler and CMake executable/version identifiers.
+- Existing hash-pinned Windows repair and retagging tool records.
 
-Land as a single coordinated pipeline change (or a staged series with explicit **no-publish** gating until complete).
-Never merge an intermediate change that merely relaxes or bypasses the current verifications. Require maintainer
-review of the lock artifact access and the supply-chain trust boundary before the first real publish.
+On Windows the build selects a matching MSVC `cl.exe` and `link.exe`
+pair and puts its directory at the front of `PATH` before invoking the
+backend. This prevents recording one compiler while a different executable
+is found first on `PATH`. Linux image and pinned Rust toolchains are still
+part of the runner's environment. Backend build hooks may invoke other
+tools not deterministically discoverable by the runner, so provenance is
+not a complete system-call trace.
 
-This proposal is intentionally conservative: some legitimate packages will be skipped if their dynamic PEP 517
-requirements cannot be pinned safely. That is preferable to publishing a wheel whose toolchain is unknown.
+The trusted `merge` step rejects a missing result, malformed provenance,
+unexpected package, mismatched tool lock, changed compiler/interpreter/image
+record or different wheel or source hashes. Even identical wheel bytes are
+rejected if the toolchain records differ.
+
+## Stage, test and publication
+
+The trusted stage job validates provenance **before** downloading or writing
+the wheel file. It also checks the actual wheel bytes, platform tags,
+libraries, licence and opt-out policy.
+
+The full staged records and provenance are written to `staged/staged.json`.
+Only the **SHA-256 of that file** and a small wheel count cross the GitHub
+job-output boundary. Publication downloads the staged artifact, verifies
+its exact SHA-256 against the trusted job output, validates its schema
+again, and only then selects candidate files. This avoids the Linux
+128 KiB per-argument/environment-string limit when publishing many wheels.
+The publish environment still requires maintainer approval, and each
+new wheel's bytes and install-test result are rechecked as before.
+
+## Fail-closed and compatibility cases
+
+- No static build metadata: use PEP 517's setuptools legacy defaults.
+- Unsupported backend hooks or unavailable target wheels: skip or fail
+  the pair rather than resolving dependencies in an untrusted build.
+- No pinned resolver, incomplete PyPI hashes or package metadata: skip.
+- Missing compiler identification or mismatched environment: reject.
+- Missing, altered or oversized staged metadata: reject, not partially
+  publish.
+- Existing published index entries remain readable; the new provenance
+  requirement applies to **newly staged** wheels.
+
+## What verification does not establish
+
+Two matching builds prove repeatability with these locked inputs, not that
+the upstream sdist or its build tools are trustworthy. They cannot detect
+a malicious tool used identically in both builds, and they do not constitute
+independently reproducible builds from a third-party source.
+
+Windows runner images are supplied by GitHub and float between releases;
+their identifiers are recorded and must match for a pair to be accepted.
+Rust and CMake version information records available executables, not a
+complete trace of processes invoked by every build backend.
+
+## Testing and operations
+
+Offline tests in `tests/test_build_tool_lock.py` and
+`tests/test_gap_wheels.py` cover source and tool hashes, lock substitution,
+provenance mismatches, staging and publishing gates, and refusal of
+unresolved dependencies.
+
+Before enabling a production publish after a resolver or schema change:
+
+1. Run the complete unit suite and Ruff checks.
+2. Run a **no-publication** target-specific resolution over all current
+   tracker candidates and all published wheel records. Report both
+   successful locks and skipped pairs, including reasons.
+3. Exercise at least one real Linux build/repair and a Windows compiler
+   identification/lock installation on both architectures.
+4. Review the staged-file hash boundary and the build workflow's read-only
+   permissions. Keep the publish environment's maintainer gate active.
+
+The first production publish after any significant lock-schema or
+environment change must be treated as a security-sensitive rollout.
