@@ -126,6 +126,23 @@ their identifiers are recorded and must match for a pair to be accepted.
 Rust and CMake version information records available executables, not a
 complete trace of processes invoked by every build backend.
 
+## No-publication validation results (18 November 2026)
+
+The fork's no-publish CI resolved static build requirements successfully for
+**44/44 tracker candidate pairs** and **26/26 published wheels**. No pair was
+skipped in that snapshot. This checks target-specific dependency and repair
+locks, not that every sdist can produce a reproducible wheel.
+
+A separate non-publishing integration matrix completed real `lz4` builds
+with pinned backend inputs on Linux (CPython 3.15), Windows x64
+(CPython 3.15) and Windows ARM (CPython 3.14). Linux also exercised
+hash-verified repair in an independent environment. The unit/regression suite
+passed **148 tests**, and the changed Python files passed Ruff.
+
+These probes are deliberately not production publications. Their temporary
+workflows are omitted from the final upstream change; the CI run history
+provides the validation evidence.
+
 ## Testing and operations
 
 Offline tests in `tests/test_build_tool_lock.py` and
