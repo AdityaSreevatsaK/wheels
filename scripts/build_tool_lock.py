@@ -19,8 +19,8 @@ import tomllib
 import urllib.parse
 import urllib.request
 import zipfile
-from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 try:
     from . import build_lab
@@ -61,7 +61,7 @@ def digest(value: object) -> str:
 
 
 def _from_pypi(url: str) -> bytes:
-    if not (url.startswith(FILES) or url.startswith(PYPI)):
+    if not url.startswith((FILES, PYPI)):
         raise LockError("a download is not a PyPI-hosted artifact")
     with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "wheelgap-build-lock/1"}),
                                 timeout=40) as response:
@@ -216,11 +216,9 @@ def validate(lock: object) -> bool:
             names.add(name)
         if group and "pip" not in names:
             return False
-    if repair and not {req.split("==")[0] for req in LINUX_REPAIR_TOOLS}.issubset(
+    return not (repair and not {req.split("==")[0] for req in LINUX_REPAIR_TOOLS}.issubset(
         {w["name"] for w in repair}
-    ):
-        return False
-    return True
+    ))
 
 
 TARGET_UV_PLATFORMS = {
@@ -288,7 +286,7 @@ def _resolve_wheels(requirements: list[str], target: str, work: Path, group: str
         cmd.extend(["--platform", platform])
     cmd.extend(["-d", str(folder), *pins])
     try:
-        downloaded = subprocess.run(cmd, capture_output=True, text=True, timeout=RESOLVE_TIMEOUT)
+        downloaded = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=RESOLVE_TIMEOUT)
     except subprocess.TimeoutExpired as exc:
         raise LockError("exact wheel downloads timed out") from exc
     if downloaded.returncode:
