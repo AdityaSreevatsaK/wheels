@@ -529,7 +529,8 @@ class Dispatch(unittest.TestCase):
 
 class Rotation(unittest.TestCase):
     def test_a_capped_batch_reaches_every_pair_in_turn(self):
-        names = lambda start: [j["name"] for j in gap_wheels.plan(BUILDS, 1, start=start) if j["attempt"] == 1]
+        def names(start):
+            return [j["name"] for j in gap_wheels.plan(BUILDS, 1, start=start) if j["attempt"] == 1]
         everyone = {p["name"] for p in gap_wheels.clean_pairs(BUILDS)}
         self.assertEqual({n for week in range(len(everyone)) for n in names(week)}, everyone)
         self.assertEqual(names(0), names(len(everyone)))  # wraps around
@@ -642,7 +643,6 @@ class Stage(unittest.TestCase):
                  mock.patch.object(gap_wheels, "missing_dlls", return_value=[]), \
                  mock.patch.object(gap_wheels, "fetch_wheel", side_effect=lambda repo, rid: next(archives)):  # fmt: skip
                 gap_wheels.cmd_stage(args)
-            lines = dict(line.split("=", 1) for line in out.read_text().splitlines())
             staged = json.loads((tmp / "staged" / "staged.json").read_text())
             self.assertEqual([(w["wheel"], w["licence"]) for w in staged], [(WIN, "MIT")])
             self.assertIn("neither PyPI nor its METADATA names an OSI-approved licence", (tmp / "summary.md").read_text())
