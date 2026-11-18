@@ -421,39 +421,88 @@ def _tool_version(cmd: list[str]) -> str:
 
 
 def _msvc_tools(target: str) -> tuple[str, str]:
-    """Find cl.exe and its matching link.exe in the installed Visual Studio toolchain.
+    """Activate one chosen MSVC installation before backend hooks can run.
 
-    GitHub-hosted Windows runners do not necessarily put MSVC on PATH, and the
-    first 'link' on PATH can be GNU coreutils rather than Microsoft's linker.
+    PATH alone is insufficient: setuptools may call vcvarsall and Rust cc-rs
+    may discover cl.exe through vswhere. Import the selected vcvarsall
+    environment and tell setuptools and Cargo to use its exact tools.
     """
     arch = "arm64" if "win-arm64" in target else "x64"
-    host = "Hostarm64" if arch == "arm64" else "Hostx64"
+    host = "Hostarm64" if platform.machine().lower() in ("arm64", "aarch64") else "Hostx64"
     roots = [Path(v) for k in ("ProgramFiles", "ProgramFiles(x86)", "VSINSTALLDIR")
              if (v := os.environ.get(k))]
-    candidates = []
+    candidates: list[Path] = []
     for root in roots:
-        for path in root.glob("Microsoft Visual Studio/*/*/VC/Tools/MSVC/*/bin/Host*/" + arch + "/cl.exe"):
-            candidates.append(path)
-        # VSINSTALLDIR points directly at a VS installation.
-        candidates += list(root.glob("VC/Tools/MSVC/*/bin/Host*/" + arch + "/cl.exe"))
+        candidates.extend(root.glob("Microsoft Visual Studio/*/*/VC/Tools/MSVC/*/bin/Host*/" + arch + "/cl.exe"))
+        candidates.extend(root.glob("VC/Tools/MSVC/*/bin/Host*/" + arch + "/cl.exe"))
     if not candidates:
         return "", ""
-    candidates.sort(key=lambda p: (host.lower() in str(p).lower(), str(p)), reverse=True)
-    compiler = candidates[0]
+
+    def installed_version(path: Path) -> tuple[int, tuple[int, ...], bool]:
+        parts = path.parts
+        release = next(
+            (parts[i + 1] for i in range(len(parts) - 1) if parts[i] == "Microsoft Visual Studio"), ""
+        )
+        visual_studio = {"2022": 17, "2019": 16, "2017": 15}.get(release)
+        if visual_studio is None:
+            visual_studio = int(release) if release.isdigit() else 0
+        toolset = next(
+            (parts[i + 1] for i in range(len(parts) - 1) if parts[i] == "MSVC"), "0"
+        )
+        versions = tuple(int(x) for x in toolset.split(".") if x.isdigit())
+        return visual_studio, versions, host.lower() in str(path).lower()
+
+    # Resolve VS 18 ahead of VS 2022/17; prefer the actual host architecture.
+    compiler = max(set(candidates), key=installed_version)
     linker = compiler.with_name("link.exe")
-    if not linker.is_file():
+    vcvars = next(
+        (parent / "Auxiliary" / "Build" / "vcvarsall.bat"
+         for parent in compiler.parents
+         if (parent / "Auxiliary" / "Build" / "vcvarsall.bat").is_file()),
+        None,
+    )
+    if not linker.is_file() or vcvars is None:
         return "", ""
-    # Force the selected executable pair to the front of the build's PATH.
-    # Without this, provenance might describe one compiler while setuptools
-    # executes a different cl.exe found by the build subprocess.
+
+    source_host = "arm64" if "hostarm64" in str(compiler).lower() else "x64"
+    tool_arch = arch if source_host == arch else f"{source_host}_{arch}"
+    with tempfile.TemporaryDirectory() as directory:
+        script = Path(directory) / "msvc-setup.cmd"
+        script.write_text(
+            f'@echo off\ncall "{vcvars}" {tool_arch} >nul\n'
+            'if errorlevel 1 exit /b 1\nset\n', encoding="utf-8"
+        )
+        try:
+            result = subprocess.run(
+                ["cmd.exe", "/d", "/c", str(script)], capture_output=True,
+                text=True, errors="replace", timeout=90, check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return "", ""
+    if result.returncode:
+        return "", ""
+
+    active = {}
+    for line in result.stdout.splitlines():
+        if "=" in line and not line.startswith("="):
+            key, value = line.split("=", 1)
+            if key and "\0" not in key + value:
+                active[key] = value
+    if not active.get("VCINSTALLDIR") or not active.get("VCToolsInstallDir"):
+        return "", ""
+    os.environ.update(active)
+    os.environ["DISTUTILS_USE_SDK"] = "1"
+    os.environ["MSSdk"] = "1"
+    os.environ["CC"] = str(compiler)
+    os.environ["CXX"] = str(compiler)
+    os.environ["CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER" if arch == "arm64"
+               else "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"] = str(linker)
     os.environ["PATH"] = f"{compiler.parent}{os.pathsep}{os.environ.get('PATH', '')}"
     if Path(shutil.which("cl.exe") or "").resolve() != compiler.resolve():
         return "", ""
     if Path(shutil.which("link.exe") or "").resolve() != linker.resolve():
         return "", ""
-    cc = _tool_version([str(compiler), "/Bv"])
-    link = _tool_version([str(linker), "/?"])
-    return cc, link
+    return _tool_version([str(compiler), "/Bv"]), _tool_version([str(linker), "/?"])
 
 
 def expected_repair_tools(target: str) -> list[dict[str, str]]:
