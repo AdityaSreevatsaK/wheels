@@ -376,32 +376,48 @@ def download_locked(item: dict, path: Path) -> None:
     path.write_bytes(data)
 
 
-def create_build_environment(lock: dict, work: Path) -> tuple[Path, list[dict]]:
-    """Install only coordinator-chosen, hash-verified wheels into a clean PEP 517 build environment."""
+def _install_environment(packages: list[dict], work: Path, group: str) -> tuple[Path, list[dict]]:
+    """Install one independently resolved group with all wheel hashes enforced."""
     import venv
 
-    root = work / "backend-venv"
+    root = work / f"{group}-venv"
     venv.EnvBuilder(with_pip=True, clear=True).create(root)
     py = root / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
-    wheel_dir = work / "locked-wheels"
+    wheel_dir = work / f"{group}-locked-wheels"
     wheel_dir.mkdir(parents=True, exist_ok=True)
-    for item in lock["wheels"]:
+    for item in packages:
         download_locked(item, wheel_dir / item["filename"])
-    reqs = work / "build-requirements.txt"
-    reqs.write_text("".join(f"{w['name']}=={w['version']} --hash=sha256:{w['sha256']}\n"
-                            for w in lock["wheels"]), encoding="utf-8")
+    reqs = work / f"{group}-requirements.txt"
+    reqs.write_text("".join(
+        f"{w['name']}=={w['version']} --hash=sha256:{w['sha256']}\n"
+        for w in packages
+    ), encoding="utf-8")
+    # Never resolve dependencies again here; both groups were resolved by the
+    # pinned target-aware coordinator and verified against PyPI's SHA-256.
     cmd = [str(py), "-m", "pip", "--isolated", "install", "--no-index", "--no-deps",
            "--require-hashes", "--only-binary=:all:", "--find-links", str(wheel_dir), "-r", str(reqs)]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, check=False)
     if result.returncode:
-        raise LockError("hash-pinned build dependency install failed: " + (result.stderr or result.stdout)[-500:])
+        raise LockError(f"hash-pinned {group} install failed: " + (result.stderr or result.stdout)[-500:])
     installed = subprocess.run([str(py), "-m", "pip", "list", "--format=json"], capture_output=True,
                                text=True, timeout=40, check=True)
     got = {canonical(x["name"]): x["version"].lower() for x in json.loads(installed.stdout)}
-    if not any(w["name"] == "pip" and w["version"] == PINNED_PIP.split("==")[1] for w in lock["wheels"]):
-        raise LockError("build pip must be present at the pinned version")
-    if any(got.get(w["name"]) != w["version"].lower() for w in lock["wheels"]):
-        raise LockError("installed build requirements differ from the coordinator lock")
-    if any(n not in {w["name"] for w in lock["wheels"]} for n in got):
-        raise LockError("unexpected build environment package")
-    return py, lock["wheels"]
+    if not any(w["name"] == "pip" and w["version"] == PINNED_PIP.split("==")[1] for w in packages):
+        raise LockError(f"{group} pip must be present at the pinned version")
+    if any(got.get(w["name"]) != w["version"].lower() for w in packages):
+        raise LockError(f"installed {group} packages differ from the coordinator lock")
+    if any(n not in {w["name"] for w in packages} for n in got):
+        raise LockError(f"unexpected {group} environment package")
+    return py, packages
+
+
+def create_build_environment(lock: dict, work: Path) -> tuple[Path, list[dict]]:
+    """Install only the coordinator's hash-verified PEP 517 build environment."""
+    return _install_environment(lock["wheels"], work, "build")
+
+
+def create_repair_environment(lock: dict, work: Path) -> tuple[Path, list[dict]] | None:
+    """Keep Linux auditwheel/patchelf in a separate hash-verified venv."""
+    if not lock["repair_wheels"]:
+        return None
+    return _install_environment(lock["repair_wheels"], work, "repair")
