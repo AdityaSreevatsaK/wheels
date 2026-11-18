@@ -199,7 +199,7 @@ def validate(lock: object) -> bool:
                     and isinstance(sha, str) and SHA.fullmatch(sha)):
                 return False
             names.add(name)
-        if group and not ("pip" in names):
+        if group and "pip" not in names:
             return False
     if repair and not {req.split("==")[0] for req in LINUX_REPAIR_TOOLS}.issubset(
         {w["name"] for w in repair}
