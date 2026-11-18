@@ -85,6 +85,13 @@ lots of outside contributions. Changes here are made by the maintainers, and eve
    It then attests the files (`gh attestation verify FILE.whl -R wheelgap/wheels`), uploads them to the `gap-wheels`
    release, records them in `data/gap-wheels.json` and deploys the index.
 
+**Machine-readable wheel status.** The generated [\`data/status.json\`](https://wheelgap.github.io/wheels/data/status.json)
+reports the current state of every retained wheel record. Each entry identifies its canonical \`project\`, \`version\`,
+\`target\`, \`wheel\`, SHA-256 and download \`url\`, plus a \`status\` code (\`in-index\`, \`yanked\`,
+\`withdrawn-pypi-has-wheel\`, \`withdrawn-release-gone\` or \`left-out-pypi-unreadable\`) and an optional
+\`yank_reason\`. The status file is refreshed with the index; \`data/gap-wheels.json\` remains the historical publication
+record. An empty yanking reason means PyPI yanked the release without explaining why.
+
 **Bundled Microsoft DLLs.** Some Windows wheels carry Microsoft Visual C++ runtime files (`msvcp140.dll`,
 `vcomp140.dll` and the like) in `<dist>.libs/`. They're Microsoft's, not the package's, redistributed under the
 "Distributable Code" terms of Visual Studio, as many wheels on PyPI do (numpy's Windows wheels, for one). The
