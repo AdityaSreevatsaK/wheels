@@ -1,5 +1,6 @@
 """Offline security regression tests for the coordinator build-tool lock and publication provenance."""
 
+import copy
 import hashlib
 import io
 import json
@@ -227,6 +228,31 @@ class TrustedPublication(unittest.TestCase):
         return gap_wheels.verify(self.jobs, results,
                                 lambda name, version: {"demo-1.0.zip": "a" * 64},
                                 locks=self.locks if locks is None else locks)
+
+    def test_linux_repair_venv_can_share_packages_with_backend_venv(self):
+        """Both venvs use pip and packaging, but only duplicates within a venv are invalid."""
+        lock = project_lock(target="3.15 linux-x86_64")
+        lock["repair_wheels"] = [
+            dict(w) for w in lock["wheels"] if w["name"] == "pip"
+        ] + [
+            {"name": name, "version": ver,
+             "filename": f"{name}-{ver}-py3-none-any.whl",
+             "url": FILE_URL + f"{name}-{ver}-py3-none-any.whl",
+             "sha256": "d" * 64}
+            for name, ver in (("auditwheel", "6.8.2"), ("patchelf", "0.19.1.0"))
+        ]
+        record = provenance(lock)
+        self.assertTrue(build_tool_lock.validate(lock))
+        self.assertTrue(gap_wheels.tool_provenance_valid(record))
+        changed = copy.deepcopy(record)
+        changed["repair_packages"].append(changed["repair_packages"][0])
+        self.assertFalse(gap_wheels.tool_provenance_valid(changed))
+        changed = copy.deepcopy(record)
+        changed["repair_packages"][0]["sha256"] = "b" * 64
+        self.assertTrue(gap_wheels.tool_provenance_valid(changed))
+        self.assertNotEqual(changed["repair_packages"], gap_wheels.expected_packages(
+            {"wheels": lock["repair_wheels"]}
+        ))
 
     def test_provenance_is_kept_in_verified_manifest(self):
         verified, rows = self.verify(self.result(), self.result(2))
