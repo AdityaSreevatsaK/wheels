@@ -192,7 +192,7 @@ class Index(unittest.TestCase):
             page,
         )
         thead = page.split("<thead>", 1)[1].split("</thead>", 1)[0]
-        headers = re.findall(r"<th\\b[^>]*>", thead)
+        headers = re.findall(r"<th\b[^>]*>", thead)
         self.assertEqual(len(headers), 8)
         self.assertTrue(all('scope="col"' in header for header in headers))
 
