@@ -237,7 +237,7 @@ def _resolve_wheels(requirements: list[str], target: str, work: Path, group: str
                                  check=True, timeout=12)
     except (OSError, subprocess.SubprocessError) as exc:
         raise LockError("the pinned uv resolver is missing") from exc
-    if version.stdout.strip() != f"uv {UV_VERSION}":
+    if version.stdout.strip().split()[:2] != ["uv", UV_VERSION]:
         raise LockError(f"expected uv {UV_VERSION}, got {version.stdout.strip()}")
     command = [
         "uv", "pip", "compile", "--no-config", "--no-build", "--no-header",
