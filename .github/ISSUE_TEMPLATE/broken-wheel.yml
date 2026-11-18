@@ -1,0 +1,69 @@
+name: Broken wheel report
+description: Report a published wheel that fails to install, import, or run (non-security issue).
+title: "Broken wheel: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For suspected malicious, unsafe or tampered wheels, **do not file a public issue**.
+        [Report a vulnerability privately](https://github.com/wheelgap/wheels/security/advisories/new).
+        This form is for ordinary installation and runtime failures.
+  - type: input
+    id: wheel
+    attributes:
+      label: Exact wheel filename
+      description: Include the full .whl filename from the published wheels table.
+      placeholder: example-1.0-cp314-cp314-win_arm64.whl
+    validations:
+      required: true
+  - type: textarea
+    id: python
+    attributes:
+      label: Python version
+      description: Paste the full output of `python -VV`.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: os
+    attributes:
+      label: Operating system and version
+      description: On Linux include the distribution and `ldd --version` output; on Windows include the Windows version and CPU architecture.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: installer
+    attributes:
+      label: Installer and version
+      description: Paste the output of `pip --version` or `uv --version`.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Exact command and full error
+      description: Include the command you ran and the complete output (remove secrets, tokens and private paths).
+      render: shell
+    validations:
+      required: true
+  - type: dropdown
+    id: source-build
+    attributes:
+      label: Does building the same release from source work on this machine?
+      description: For pip, try `python -m pip install --no-binary NAME NAME==VERSION` in a fresh environment if you can safely build it.
+      options:
+        - "Yes"
+        - "No"
+        - "Not tested"
+    validations:
+      required: true
+  - type: textarea
+    id: source-details
+    attributes:
+      label: Source-build command and result
+      description: If you tried a source build, include its exact command and result.
+      render: shell
+    validations:
+      required: false
