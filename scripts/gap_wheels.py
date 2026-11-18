@@ -887,6 +887,12 @@ def gh(args: list[str]) -> bytes:
 def cmd_dispatch(args: argparse.Namespace) -> int:
     check_args(args)
     jobs = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+    lock_path = Path(args.locks)
+    if not lock_path.is_file() or lock_path.stat().st_size > 4_000_000:
+        raise SystemExit("gap_wheels: no trusted coordinator locks for dispatch")
+    bundle = json.loads(lock_path.read_text(encoding="utf-8"))
+    if not isinstance(bundle, dict) or set(bundle) != {"schema", "pairs"} or bundle["schema"] != 1:
+        raise SystemExit("gap_wheels: invalid coordinator lock bundle")
     for n, job in enumerate(jobs):
         # At most --parallel of this batch's builds at once, so the batch doesn't hold every runner the account has.
         while sum(r.get("status") != "completed" for r in this_batch(retry(lambda: list_runs(args.repo, args.since)),
@@ -901,10 +907,19 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
             raise SystemExit(f"gap_wheels: not a plan job: {job!r}")
         if not build_tool_lock.SHA.fullmatch(job.get("lock_sha256", "")):
             raise SystemExit("gap_wheels: no trusted lock digest on planned build")
+        lock = bundle["pairs"].get(str(job["id"]))
+        if (not build_tool_lock.validate(lock) or build_tool_lock.digest(lock) != job["lock_sha256"]
+                or (lock["name"], lock["version"], lock["target"])
+                != (build_lab.canonical(job["name"]), job["version"], job["target"])):
+            raise SystemExit("gap_wheels: dispatch lock does not match the planned pair")
+        # Every build receives the same one-pair lock as an input. Do not grant
+        # untrusted builds permissions to download coordinator artifacts.
+        lock_json = json.dumps({"schema": 1, "pairs": {"0": lock}}, separators=(",", ":"), sort_keys=True)
+        if len(lock_json.encode("utf-8")) > 30_000:
+            raise SystemExit("gap_wheels: pair lock exceeds the dispatch input limit")
         fields = {"batch": args.batch, "name": job["name"], "version": job["version"], "target": job["target"],
                   "attempt": str(job["attempt"]), "runner": spec["runner"],
-                  "pair_id": job["id"], "lock_sha256": job["lock_sha256"],
-                  "coordinator_run": args.batch.split("-", 1)[0],
+                  "lock_sha256": job["lock_sha256"], "lock_json": lock_json,
                   # In an image the build runs that image's interpreter for the target, not setup-python's.
                   "python": spec.get("interpreter", spec["python"]) if "image" in spec else spec["python"],
                   "image": spec.get("image", "")}  # fmt: skip
@@ -2129,7 +2144,7 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--summary")
     m.set_defaults(func=cmd_merge)
     d = sub.add_parser("dispatch")
-    for flag in ("--plan", "--batch", "--repo", "--sha", "--since"):
+    for flag in ("--plan", "--batch", "--repo", "--sha", "--since", "--locks"):
         d.add_argument(flag, required=True)
     d.add_argument("--parallel", type=int, default=20, help="most of this batch's builds running at once")
     d.set_defaults(func=cmd_dispatch)
