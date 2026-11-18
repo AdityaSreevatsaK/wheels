@@ -21,7 +21,10 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-import build_lab
+try:
+    from . import build_lab
+except ImportError:  # executed directly by scripts/gap_wheels.py
+    import build_lab
 
 PYPI = "https://pypi.org/pypi/"
 FILES = "https://files.pythonhosted.org/packages/"
