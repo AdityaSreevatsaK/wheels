@@ -125,7 +125,8 @@ package's own licence, which staging checks, doesn't cover them.
   normal way runs the same code. These wheels are only as trustworthy as the sdist PyPI serves.
 - **A compromise of a build toolchain.** Build backends and their resolved dependencies are now pinned by wheel
   SHA-256 in a coordinator-generated lock, as is the build environment's pip version. Linux builds use a digest-pinned
-  image and a version-pinned Rust toolchain (rustup-init itself is SHA-256 checked); repair tools use pinned versions.
+  image and a version-pinned Rust toolchain (rustup-init itself is SHA-256 checked); auditwheel, patchelf
+  and their Python dependencies are included in the coordinator's SHA-256-pinned wheel lock.
   Windows builds use SHA-256-pinned wheel bundling and retagging tools, but the GitHub-hosted runner image and the
   exact installed MSVC/CPython patch versions still float. The pipeline records those versions and refuses to compare
   results made with different ones. Matching builds under the same tools **cannot** detect a malicious sdist, a
