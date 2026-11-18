@@ -78,7 +78,7 @@ SHA256 = re.compile(r"[0-9a-f]{64}", re.ASCII)
 RESULT_KEYS = frozenset(
     {"schema", "name", "version", "target", "attempt", "runner", "sdist", "sdist_sha256", "wheel", "sha256", "installs", "tools"}
 )
-MAX_RESULT_BYTES = 16_000
+MAX_RESULT_BYTES = 64_000  # pair locks are bounded before dispatch by the coordinator
 BUILD_TIMEOUT = build_lab.BUILD_TIMEOUT
 INSTALL_TIMEOUT = build_lab.INSTALL_TIMEOUT
 
@@ -457,11 +457,12 @@ def _msvc_tools(target: str) -> tuple[str, str]:
 
 
 def expected_repair_tools(target: str) -> list[dict[str, str]]:
-    """The separately hash-verified Windows bundling and retagging tools."""
-    if "win-" not in target:
-        return []  # Linux repair tools, including their dependencies, are in the coordinator lock.
+    """The separately hash-verified bundling and retagging tools on each platform."""
+    tools = WINDOWS_REPAIR_TOOLS + RETAG_TOOLS if "win-" in target else RETAG_TOOLS
+    # Linux auditwheel/patchelf and their dependencies are separately checked
+    # against the coordinator lock in repair_packages.
     return [{"requirement": package, "sha256": TOOL_HASHES[package]}
-            for package in sorted(set(WINDOWS_REPAIR_TOOLS + RETAG_TOOLS))]
+            for package in sorted(set(tools))]
 
 
 def build_tool_provenance(lock_sha256: str, packages: list[dict], target: str) -> dict:
@@ -658,14 +659,15 @@ def tool_provenance_valid(value: object) -> bool:
     }:
         return False
     if not (isinstance(value["lock_sha256"], str) and SHA256.fullmatch(value["lock_sha256"])
-            and isinstance(value["python"], str) and re.fullmatch(r"\d+\.\d+\.\d+", value["python"])
-            and isinstance(value["python_build"], str) and 0 < len(value["python_build"]) <= 500
-            and isinstance(value["runner_image"], str) and 0 < len(value["runner_image"]) <= 500):
+            and isinstance(value["python"], str)
+            and re.fullmatch(r"\d+\.\d+\.\d+(?:(?:a|b|rc)\d+)?(?:\.dev\d+)?", value["python"])
+            and isinstance(value["python_build"], str) and re.fullmatch(r"[ -~]{1,500}", value["python_build"])
+            and isinstance(value["runner_image"], str) and re.fullmatch(r"[ -~]{1,500}", value["runner_image"])):
         return False
     compiler = value["compiler"]
     if not isinstance(compiler, dict) or set(compiler) != {"cc", "link", "rustc", "cmake"}:
         return False
-    if not all(isinstance(c, str) and len(c) <= 500 for c in compiler.values()):
+    if not all(isinstance(c, str) and re.fullmatch(r"[ -~]{0,500}", c) for c in compiler.values()):
         return False
     if not compiler["cc"] or not compiler["link"]:
         return False
