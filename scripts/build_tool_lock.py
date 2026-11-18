@@ -31,7 +31,7 @@ FILES = "https://files.pythonhosted.org/packages/"
 MAX_DOWNLOAD = 48_000_000
 MAX_PROJECT = 131_072
 PINNED_PIP = "pip==26.3"  # the builder itself must also be a hash-verified wheel
-LINUX_REPAIR_TOOLS = ("auditwheel==6.8.2", "patchelf==0.19.1.0")
+LINUX_REPAIR_TOOLS = build_lab.REPAIR_TOOLS
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 WHEEL = re.compile(r"[A-Za-z0-9._+!-]{1,200}\.whl\Z")
