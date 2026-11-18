@@ -684,17 +684,21 @@ def tool_provenance_valid(value: object) -> bool:
                 or re.fullmatch(r"[A-Za-z0-9._-]+==[A-Za-z0-9._+-]+", item["requirement"]) is None
                 or not isinstance(item["sha256"], str) or SHA256.fullmatch(item["sha256"]) is None):
             return False
-    names = set()
-    for p in [*pkgs, *repair_pkgs]:
-        if not isinstance(p, dict) or set(p) != {"name", "version", "filename", "sha256"}:
-            return False
-        if not (isinstance(p["name"], str) and build_tool_lock.NAME.fullmatch(p["name"])
-                and (p["name"], p["sha256"]) not in names and isinstance(p["version"], str)
-                and 0 < len(p["version"]) <= 100 and isinstance(p["filename"], str)
-                and build_tool_lock.WHEEL.fullmatch(p["filename"])
-                and isinstance(p["sha256"], str) and SHA256.fullmatch(p["sha256"])):
-            return False
-        names.add((p["name"], p["sha256"]))
+    # The build and repair virtual environments are independent. Packages
+    # such as pip and packaging legitimately occur in both locked groups;
+    # reject duplicates *within* either group, not across the groups.
+    for group in (pkgs, repair_pkgs):
+        names = set()
+        for p in group:
+            if not isinstance(p, dict) or set(p) != {"name", "version", "filename", "sha256"}:
+                return False
+            if not (isinstance(p["name"], str) and build_tool_lock.NAME.fullmatch(p["name"])
+                    and p["name"] not in names and isinstance(p["version"], str)
+                    and 0 < len(p["version"]) <= 100 and isinstance(p["filename"], str)
+                    and build_tool_lock.WHEEL.fullmatch(p["filename"])
+                    and isinstance(p["sha256"], str) and SHA256.fullmatch(p["sha256"])):
+                return False
+            names.add(p["name"])
     return True
 
 
