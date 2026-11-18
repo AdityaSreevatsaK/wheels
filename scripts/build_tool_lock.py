@@ -31,6 +31,8 @@ PYPI = "https://pypi.org/pypi/"
 FILES = "https://files.pythonhosted.org/packages/"
 MAX_DOWNLOAD = 48_000_000
 MAX_PROJECT = 131_072
+# Keep one pair's lock within dispatch and result-artifact limits before any builds run.
+MAX_PAIR_LOCK_BYTES = 24_000
 UV_VERSION = "0.13.9"
 RESOLVE_WORKERS = 4
 RESOLVE_TIMEOUT = 120
@@ -331,6 +333,8 @@ def resolve(pair: dict) -> dict:
               "sdist_sha256": meta["sha256"], "wheels": locked, "repair_wheels": repair}
     if not validate(result):
         raise LockError("resolved tool lock is malformed")
+    if len(canonical_bytes(result)) > MAX_PAIR_LOCK_BYTES:
+        raise LockError("pair build-tool lock exceeds the coordinator size limit")
     return result
 
 
