@@ -40,7 +40,7 @@ def project_lock(name="demo", target=TARGET):
 
 def provenance(lock):
     return {"lock_sha256": build_tool_lock.digest(lock), "packages": gap_wheels.expected_packages(lock),
-            "python": "3.14.10", "python_build": "3.14.10 test", "runner_image": "20261118.1",
+            "repair_tools": gap_wheels.expected_repair_tools(lock["target"]), "python": "3.14.10", "python_build": "3.14.10 test", "runner_image": "20261118.1",
             "compiler": {"cc": "MSVC compiler 19.0", "link": "MSVC linker 14.0"}}
 
 
