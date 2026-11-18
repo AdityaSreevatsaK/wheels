@@ -411,13 +411,40 @@ def _tool_version(cmd: list[str]) -> str:
         return ""
 
 
+def _msvc_tools(target: str) -> tuple[str, str]:
+    """Find cl.exe and its matching link.exe in the installed Visual Studio toolchain.
+
+    GitHub-hosted Windows runners do not necessarily put MSVC on PATH, and the
+    first 'link' on PATH can be GNU coreutils rather than Microsoft's linker.
+    """
+    arch = "arm64" if "win-arm64" in target else "x64"
+    host = "Hostarm64" if arch == "arm64" else "Hostx64"
+    roots = [Path(v) for k in ("ProgramFiles", "ProgramFiles(x86)", "VSINSTALLDIR")
+             if (v := os.environ.get(k))]
+    candidates = []
+    for root in roots:
+        for path in root.glob("Microsoft Visual Studio/*/*/VC/Tools/MSVC/*/bin/Host*/" + arch + "/cl.exe"):
+            candidates.append(path)
+        # VSINSTALLDIR points directly at a VS installation.
+        candidates += list(root.glob("VC/Tools/MSVC/*/bin/Host*/" + arch + "/cl.exe"))
+    if not candidates:
+        return "", ""
+    candidates.sort(key=lambda p: (host.lower() in str(p).lower(), str(p)), reverse=True)
+    compiler = candidates[0]
+    linker = compiler.with_name("link.exe")
+    if not linker.is_file():
+        return "", ""
+    cc = _tool_version([str(compiler), "/Bv"])
+    link = _tool_version([str(linker), "/?"])
+    return cc, link
+
+
 def build_tool_provenance(lock_sha256: str, packages: list[dict], target: str) -> dict:
     """Record tools before the sdist's build backend is executed."""
     image = build_lab.TARGETS[target].get("image") or os.environ.get("ImageVersion", "")
     if os.name == "nt":
-        # The runner image floats: record its exact version, not just the windows-2025 label.
-        cc = _tool_version(["cl.exe", "/Bv"])
-        link = _tool_version(["link.exe", "/?"])
+        # The runner image floats: record its exact version, not just the Windows runner label.
+        cc, link = _msvc_tools(target)
     else:
         cc = _tool_version(["cc", "--version"])
         link = _tool_version(["ld", "--version"])
