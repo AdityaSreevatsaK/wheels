@@ -240,7 +240,7 @@ def _resolve_wheels(requirements: list[str], target: str, work: Path, group: str
     if version.stdout.strip().split()[:2] != ["uv", UV_VERSION]:
         raise LockError(f"expected uv {UV_VERSION}, got {version.stdout.strip()}")
     command = [
-        "uv", "pip", "compile", "--no-config", "--no-build", "--no-header",
+        "uv", "pip", "compile", "--no-config", "--no-header",
         "--no-annotate", "--only-binary", ":all:", "--python-platform", uv_platform,
         "--python-version", python_version, "--index-url", "https://pypi.org/simple/",
         "--output-file", str(output), str(req),
