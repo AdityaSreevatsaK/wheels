@@ -25,10 +25,14 @@ For each release/platform pair it:
    configured with the target's Python version and platform. This avoids
    evaluating `sys_platform` and `platform_machine` on the coordinator's
    Linux interpreter. Only wheel distributions may be selected.
-4. Downloads the exact pinned versions with `--no-deps` for the target's
+4. Supplements the static build requirements with known hook requirements for
+   meson-python (ninja and Linux patchelf) and scikit-build-core (cmake and
+   ninja). Maturin uses the existing pinned Rust toolchain. These tools are
+   resolved in the coordinator, not dynamically downloaded by the backend.
+5. Downloads the exact pinned versions with `--no-deps` for the target's
    ABI/platform. Every downloaded wheel must appear in its PyPI release
    listing and match its published SHA-256.
-5. Independently resolves Linux repair tools (`auditwheel`, `patchelf`,
+6. Independently resolves Linux repair tools (`auditwheel`, `patchelf`,
    their dependencies and pip) into a **separate lock**. The build backend
    never imports or executes from the repair tool environment.
 
@@ -36,11 +40,12 @@ The lock records the source filename, URL and hash, and for each of the two
 tool groups its package name, exact version, filename, PyPI URL and SHA-256.
 Its canonical JSON digest binds all of these fields.
 
-A bounded four-worker pool resolves pairs. Unresolvable pairs are skipped,
-not dispatched. The step summary reports locked and skipped pairs, with
-reasons. A static lock cannot safely anticipate arbitrary
-`get_requires_for_build_wheel` hooks: if a backend requests a dependency that
-isn't installed, its isolated build fails without trying a public index.
+A bounded four-worker pool resolves pairs. Unresolvable or oversized pair
+locks (over 24,000 bytes) are skipped before dispatch, not after builds.
+The step summary reports locked and skipped pairs, with reasons. Known
+Meson and scikit-build-core extras are included, but unknown or arbitrary
+`get_requires_for_build_wheel` requirements still fail closed without
+fetching new packages during a build.
 No source distribution is executed during resolution.
 
 ## Dispatch: no extra permissions on untrusted builds
@@ -75,9 +80,12 @@ Each result records:
 - Existing hash-pinned Windows repair and retagging tool records.
 
 On Windows the build selects a matching MSVC `cl.exe` and `link.exe`
-pair and puts its directory at the front of `PATH` before invoking the
-backend. This prevents recording one compiler while a different executable
-is found first on `PATH`. Linux image and pinned Rust toolchains are still
+pair, invokes that installation's `vcvarsall.bat` and verifies
+`VCToolsInstallDir` points at the same toolset. It exports the active SDK
+and compiler environment, with `DISTUTILS_USE_SDK=1`, `MSSdk=1`,
+`CC`, `CXX` and the target-specific Cargo linker set, then checks the
+compiler and linker on `PATH`. This prevents silently recording a different
+MSVC toolset from the one configured for the backend. Linux image and pinned Rust toolchains are still
 part of the runner's environment. Backend build hooks may invoke other
 tools not deterministically discoverable by the runner, so provenance is
 not a complete system-call trace.
