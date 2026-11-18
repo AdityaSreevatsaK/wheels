@@ -305,20 +305,29 @@ def retag(wheel: Path, work: Path, tag: str) -> Path | None:
     return found
 
 
-def repair(wheel: Path, work: Path, plat: str | None = None) -> Path | None:
+def repair(wheel: Path, work: Path, plat: str | None = None, locked_python: Path | None = None) -> Path | None:
     """`auditwheel repair` of a Linux wheel into WORK/repaired: the one wheel it writes, or None (said why). With
     `plat`, to exactly that platform tag (auditwheel refuses if the wheel needs a newer glibc or musl)."""
-    tools = work / "repair-tools"
-    subprocess.run([sys.executable, "-m", "venv", str(tools)], check=True, timeout=INSTALL_TIMEOUT)
-    bin_dir = tools / "bin"
+    if locked_python is not None:
+        # Production builds use auditwheel/patchelf and their transitive dependencies from
+        # the coordinator's hash-verified backend environment. Never re-resolve them.
+        bin_dir = locked_python.parent
+        if not (bin_dir / "auditwheel").is_file():
+            print("gap_wheels: locked auditwheel is missing", file=sys.stderr)
+            return None
+    else:
+        # Standalone repair helper: retained for the diagnostic/unit-test entry point.
+        tools = work / "repair-tools"
+        subprocess.run([sys.executable, "-m", "venv", str(tools)], check=True, timeout=INSTALL_TIMEOUT)
+        bin_dir = tools / "bin"
+        i = subprocess.run([str(bin_dir / "python"), "-m", "pip", "install", "--no-cache-dir", "--only-binary", ":all:",
+                            *REPAIR_TOOLS], check=False, env=build_env(), capture_output=True, text=True,
+                           errors="replace", timeout=INSTALL_TIMEOUT)  # fmt: skip
+        if i.returncode != 0:
+            print((i.stdout + i.stderr)[-3000:])
+            print("gap_wheels: couldn't install the repair tools", file=sys.stderr)
+            return None
     env = dict(build_env(), PATH=f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
-    i = subprocess.run([str(bin_dir / "python"), "-m", "pip", "install", "--no-cache-dir", "--only-binary", ":all:",
-                        *REPAIR_TOOLS], check=False, env=env, capture_output=True, text=True, errors="replace",
-                       timeout=INSTALL_TIMEOUT)  # fmt: skip
-    if i.returncode != 0:
-        print((i.stdout + i.stderr)[-3000:])
-        print("gap_wheels: couldn't install the repair tools", file=sys.stderr)
-        return None
     out = work / "repaired"
     try:
         plat_args = ["--plat", plat, "--only-plat"] if plat else []  # exactly that tag, no wider (older) one
@@ -338,7 +347,8 @@ def repair(wheel: Path, work: Path, plat: str | None = None) -> Path | None:
 
 
 def finish_wheel(
-    wheel: Path, work: Path, plat: str | None, tag: str | None, platform_pattern: str | None = None
+    wheel: Path, work: Path, plat: str | None, tag: str | None, platform_pattern: str | None = None,
+    locked_python: Path | None = None,
 ) -> Path | None:
     """The built wheel as it will be compared and published, or None (said why): on Linux repaired to `plat`
     (auditwheel); a py3-none-<platform> wheel retagged to `tag`, its target's one publishable tag, but only if every
@@ -354,7 +364,7 @@ def finish_wheel(
         # Logged for the reproducibility spike (#124): a pair that differs after repair but matched before points
         # at auditwheel or patchelf, not the compiler.
         print(f"gap_wheels: before repair: {wheels[0].name} sha256 {sha256(wheels[0])}")
-        repaired = repair(wheels[0], work, plat)
+        repaired = repair(wheels[0], work, plat, locked_python=locked_python)
         if repaired is None:
             print("gap_wheels: repair failed (the wheel built; auditwheel couldn't repair it)", file=sys.stderr)
             return None
@@ -439,6 +449,14 @@ def _msvc_tools(target: str) -> tuple[str, str]:
     return cc, link
 
 
+def expected_repair_tools(target: str) -> list[dict[str, str]]:
+    """The separately hash-verified Windows bundling and retagging tools."""
+    if "win-" not in target:
+        return []  # Linux repair tools, including their dependencies, are in the coordinator lock.
+    return [{"requirement": package, "sha256": TOOL_HASHES[package]}
+            for package in sorted(set(WINDOWS_REPAIR_TOOLS + RETAG_TOOLS))]
+
+
 def build_tool_provenance(lock_sha256: str, packages: list[dict], target: str) -> dict:
     """Record tools before the sdist's build backend is executed."""
     image = build_lab.TARGETS[target].get("image") or os.environ.get("ImageVersion", "")
@@ -452,6 +470,7 @@ def build_tool_provenance(lock_sha256: str, packages: list[dict], target: str) -
         "lock_sha256": lock_sha256,
         "packages": [{"name": w["name"], "version": w["version"], "sha256": w["sha256"],
                       "filename": w["filename"]} for w in packages],
+        "repair_tools": expected_repair_tools(target),
         "python": platform.python_version(),
         "python_build": sys.version,
         "runner_image": image,
@@ -520,7 +539,7 @@ def run_build(
     if p.returncode != 0 or len(wheels) != 1 or not WHEEL.fullmatch(wheels[0].name):
         print(f"gap_wheels: expected one wheel, found {len(wheels)}", file=sys.stderr)
         return fields
-    finished = finish_wheel(wheels[0], work, plat, tag, platform_pattern)
+    finished = finish_wheel(wheels[0], work, plat, tag, platform_pattern, locked_python=py)
     if finished is None:
         return fields
     wheels = [finished]
@@ -610,7 +629,7 @@ def wheel_problem(wheel: object, job: dict) -> str | None:
 def tool_provenance_valid(value: object) -> bool:
     """The provenance schema required for every new, publishable wheel."""
     if not isinstance(value, dict) or set(value) != {
-        "lock_sha256", "packages", "python", "python_build", "runner_image", "compiler"
+        "lock_sha256", "packages", "repair_tools", "python", "python_build", "runner_image", "compiler"
     }:
         return False
     if not (isinstance(value["lock_sha256"], str) and SHA256.fullmatch(value["lock_sha256"])
@@ -626,6 +645,15 @@ def tool_provenance_valid(value: object) -> bool:
     pkgs = value["packages"]
     if not isinstance(pkgs, list) or not 0 < len(pkgs) <= 100:
         return False
+    repair_tools = value["repair_tools"]
+    if not isinstance(repair_tools, list) or len(repair_tools) > 10:
+        return False
+    for item in repair_tools:
+        if (not isinstance(item, dict) or set(item) != {"requirement", "sha256"}
+                or not isinstance(item["requirement"], str)
+                or re.fullmatch(r"[A-Za-z0-9._-]+==[A-Za-z0-9._+-]+", item["requirement"]) is None
+                or not isinstance(item["sha256"], str) or SHA256.fullmatch(item["sha256"]) is None):
+            return False
     names = set()
     for p in pkgs:
         if not isinstance(p, dict) or set(p) != {"name", "version", "filename", "sha256"}:
@@ -740,6 +768,8 @@ def verify(
             or build_tool_lock.digest(locks["pairs"][pid]) != job.get("lock_sha256")
             or first["tools"]["packages"] != expected_packages(locks["pairs"][pid])
             or second["tools"]["packages"] != expected_packages(locks["pairs"][pid])
+            or first["tools"]["repair_tools"] != expected_repair_tools(job["target"])
+            or second["tools"]["repair_tools"] != expected_repair_tools(job["target"])
             or first["sdist"] != locks["pairs"][pid]["sdist"]
             or second["sdist"] != locks["pairs"][pid]["sdist"]
             or first["sdist_sha256"] != locks["pairs"][pid]["sdist_sha256"]
