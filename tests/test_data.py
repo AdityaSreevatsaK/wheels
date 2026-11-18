@@ -27,6 +27,8 @@ ENTRY_KEYS = {
 }
 SHA256 = re.compile(r"[0-9a-f]{64}", re.ASCII)
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
+# A target dropped from PUBLISH_TAGS (say "3.14 win-arm64", later): its wheels stay published until withdrawn.
+RETIRED_TARGET = re.compile(r"3\.([0-9]{1,2})(t?) [a-z0-9]+(?:-[a-z0-9_]+)+", re.ASCII)
 
 
 def run_url(value: object) -> bool:
@@ -37,6 +39,34 @@ def run_url(value: object) -> bool:
         and value.startswith(("https://github.com/wheelgap/wheels/actions/runs/",
                               "https://github.com/wheelgap/tracker/actions/runs/"))
     )
+
+
+def versions(version: str) -> set[str]:
+    """The spellings of `version` a wheel or sdist file name may carry, as gap_wheels.wheel_problem accepts them."""
+    return {version.lower(), version.lower().replace("-", "_")}
+
+
+def sdist_ok(sdist: object, project: str, version: str) -> bool:
+    """A .tar.gz or .zip named `<project>-<version>` (any spelling of the name, a version spelling wheels may use)."""
+    if not isinstance(sdist, str) or not sdist.endswith((".tar.gz", ".zip")):
+        return False
+    stem = sdist.lower().removesuffix(".tar.gz").removesuffix(".zip")
+    return any(stem.endswith(f"-{v}") and build_gap_index.canonical(stem[: -len(v) - 1]) == project
+               for v in versions(version))
+
+
+def target_ok(filename: str, target: object) -> bool:
+    """The wheel carries its target's one publishable tag; for a retired target, one plain CPython tag of its version."""
+    if not isinstance(target, str):
+        return False
+    if target in gap_wheels.PUBLISH_TAGS:
+        return gap_wheels.tag_ok(filename, target)
+    m = RETIRED_TARGET.fullmatch(target)
+    parts = filename[: -len(".whl")].split("-")
+    if m is None or len(parts) not in (5, 6) or "." in "".join(parts[-3:]):
+        return False
+    py = f"cp3{m.group(1)}"
+    return parts[-3] == py and parts[-2] == py + m.group(2)
 
 
 def published_date(value: object) -> dt.date | None:
@@ -62,9 +92,8 @@ def validation_errors(data: object, optout: set[str]) -> list[str]:
             continue
         filename = entry.get("wheel")
         label = filename if isinstance(filename, str) else f"entry {i}"
-        if set(entry) != ENTRY_KEYS:
-            errors.append(f"{label}: expected 14 keys; missing {sorted(ENTRY_KEYS - set(entry))}, "
-                          f"unexpected {sorted(set(entry) - ENTRY_KEYS)}")
+        if missing := sorted(ENTRY_KEYS - set(entry)):  # a field added later is fine; one dropped or misspelt isn't
+            errors.append(f"{label}: missing {missing}")
         if not build_gap_index.usable(entry):
             errors.append(f"{label}: build_gap_index.usable rejected the entry")
         if not isinstance(filename, str):
@@ -81,14 +110,11 @@ def validation_errors(data: object, optout: set[str]) -> list[str]:
             errors.append(f"{label}: invalid version")
             continue
         parsed = build_gap_index.wheel_tags(filename)
-        if parsed is None or parsed[:2] != (project, version.lower()):
+        if parsed is None or parsed[0] != project or parsed[1] not in versions(version):
             errors.append(f"{label}: wheel filename differs from name or version")
-        if not isinstance(entry.get("target"), str) or not gap_wheels.tag_ok(filename, entry["target"]):
+        if not target_ok(filename, entry.get("target")):
             errors.append(f"{label}: filename tag does not match its publish target")
-        sdist = entry.get("sdist")
-        if not isinstance(sdist, str) or not sdist.endswith((".tar.gz", ".zip")) or (
-            build_gap_index.file_version(sdist, project) != version.lower()
-        ):
+        if not sdist_ok(entry.get("sdist"), project, version):
             errors.append(f"{label}: sdist filename does not match the project and version")
         for key in ("sha256", "sdist_sha256"):
             val = entry.get(key)
@@ -137,8 +163,8 @@ class PublishedData(unittest.TestCase):
         self.assertEqual(len(result), len(raw), f"{REQUESTS.name}: request count differs from source")
 
     def test_bad_request_handle_or_link_is_dropped_by_the_site_parser(self):
-        original = json.loads(REQUESTS.read_text(encoding="utf-8"))
-        project = next(iter(original))
+        original = {"example": {"by": "u/example", "url": "https://github.com/example"}}
+        project = "example"
         for field, bad in (("by", "u/has space"), ("url", "https://evil.example/user")):
             with self.subTest(field=field), tempfile.TemporaryDirectory() as folder:
                 damaged = copy.deepcopy(original)
@@ -152,9 +178,10 @@ class PublishedData(unittest.TestCase):
         data = json.loads(WHEELS.read_text(encoding="utf-8"))
         sample = data["wheels"][0]
         cases = [
-            ("wrong shape", lambda w: w.update(extra="not in the 14 keys")),
+            ("missing key", lambda w: w.pop("sdist_sha256")),
             ("unusable", lambda w: w.update(sha256="invalid")),
-            ("target", lambda w: w.update(target="3.15 win-amd64")),
+            ("target", lambda w: w.update(target=next(t for t in gap_wheels.PUBLISH_TAGS if t != w["target"]))),
+            ("retired target", lambda w: w.update(target="3.13 linux-riscv64")),
             ("wheel version", lambda w: w.update(wheel=w["wheel"].replace(w["version"], "999", 1))),
             ("sdist", lambda w: w.update(sdist="another-999.zip")),
             ("sdist hash", lambda w: w.update(sdist_sha256="F" * 64)),
