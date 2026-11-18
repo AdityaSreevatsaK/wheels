@@ -78,7 +78,7 @@ SHA256 = re.compile(r"[0-9a-f]{64}", re.ASCII)
 RESULT_KEYS = frozenset(
     {"schema", "name", "version", "target", "attempt", "runner", "sdist", "sdist_sha256", "wheel", "sha256", "installs", "tools"}
 )
-MAX_RESULT_BYTES = 80_000
+MAX_RESULT_BYTES = 16_000
 BUILD_TIMEOUT = build_lab.BUILD_TIMEOUT
 INSTALL_TIMEOUT = build_lab.INSTALL_TIMEOUT
 
