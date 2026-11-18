@@ -124,10 +124,17 @@ class PublishedData(unittest.TestCase):
         raw = json.loads(REQUESTS.read_text(encoding="utf-8"))
         self.assertIsInstance(raw, dict)
         result = build_gap_index.read_requests(REQUESTS)
-        self.assertEqual(len(result), len(raw),
-                         f"{REQUESTS.name}: one or more request entries were rejected")
+        seen: dict[str, str] = {}
         for project in raw:
-            self.assertIn(build_gap_index.canonical(project), result, f"{project}: request was silently dropped")
+            canonical = build_gap_index.canonical(project)
+            self.assertNotIn(
+                canonical, seen, f"{project}: duplicate canonical project name also used by {seen.get(canonical)}"
+            )
+            seen[canonical] = project
+            self.assertIn(
+                canonical, result, f"{project}: request was rejected (check by and url fields)"
+            )
+        self.assertEqual(len(result), len(raw), f"{REQUESTS.name}: request count differs from source")
 
     def test_bad_request_handle_or_link_is_dropped_by_the_site_parser(self):
         original = json.loads(REQUESTS.read_text(encoding="utf-8"))
