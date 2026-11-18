@@ -273,6 +273,64 @@ class TrustedPublication(unittest.TestCase):
                 "licence": "MIT", "requires_python": None, "verified": "2026-11-18", "batch": "r"
             }]))
 
+    def test_publish_requires_exact_digest_of_staged_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            staged_file = root / "staged.json"
+            # Larger than Linux's single-argument limit, but safe in a file.
+            staged_file.write_text(" " * 140_000 + "[]", encoding="utf-8")
+            options = {
+                "staged_file": str(staged_file),
+                "staged_sha256": hashlib.sha256(staged_file.read_bytes()).hexdigest(),
+                "files": str(root), "tested": str(root / "tested"),
+                "index": str(root / "index.json"),
+                "release_dir": str(root / "release"),
+                "optout": str(root / "optout.txt"),
+                "run": "https://github.com/wheelgap/wheels/actions/runs/1",
+                "summary": None,
+            }
+            args = gap_wheels.argparse.Namespace(**options)
+            with mock.patch.object(gap_wheels, "select", return_value=([], [])):
+                self.assertEqual(gap_wheels.cmd_publish(args), 0)
+            self.assertTrue((root / "index.json").is_file())
+            args.staged_sha256 = "0" * 64
+            with mock.patch.object(gap_wheels, "select") as choose:
+                with self.assertRaisesRegex(SystemExit, "digest-verified"):
+                    gap_wheels.cmd_publish(args)
+                choose.assert_not_called()
+            staged_file.write_text("[]", encoding="utf-8")
+            args.staged_sha256 = "0" * 64
+            with self.assertRaisesRegex(SystemExit, "digest-verified"):
+                gap_wheels.cmd_publish(args)
+
+    def test_stage_rejects_invalid_provenance_before_fetching_wheel(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            wheel = {
+                "name": "demo", "version": "1.0", "target": TARGET,
+                "wheel": "demo-1.0-cp314-cp314-win_arm64.whl",
+                "sha256": "b" * 64,
+                "tools": None,
+            }
+            manifest = root / "manifest.json"
+            manifest.write_text(json.dumps({"wheels": [wheel]}))
+            output = root / "stage-output.txt"
+            args = gap_wheels.argparse.Namespace(
+                manifest=str(manifest), staged=str(root / "staged"),
+                optout=str(root / "optout.txt"),
+                repo="wheelgap/wheels", summary=None, github_output=str(output)
+            )
+            with (mock.patch.object(gap_wheels, "pypi_info") as info,
+                  mock.patch.object(gap_wheels, "take_wheel") as take):
+                gap_wheels.cmd_stage(args)
+                info.assert_not_called()
+                take.assert_not_called()
+            self.assertEqual(json.loads((root / "staged" / "staged.json").read_text()), [])
+            answers = dict(line.split("=", 1) for line in output.read_text().splitlines())
+            self.assertEqual(answers["staged_count"], "0")
+            self.assertEqual(len(answers["staged_sha256"]), 64)
+            self.assertNotIn("staged", answers)
+
     def test_unpinned_build_never_launches_package_code(self):
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(gap_wheels.subprocess, "run") as runner:
             result = gap_wheels.run_build("demo", "1.0", 1, Path(folder))
