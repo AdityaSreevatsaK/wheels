@@ -203,6 +203,19 @@ class Index(unittest.TestCase):
             self.assertTrue(label.startswith(visible_text + " "), label)
         self.assertNotIn("<script", page)
 
+    def test_current_published_data_has_accessible_links_without_scripts(self):
+        path = Path(__file__).resolve().parents[1] / "data" / "gap-wheels.json"
+        published = json.loads(path.read_text(encoding="utf-8"))["wheels"]
+        page = build_gap_index.human_page(build_gap_index.projects(published))
+        for entry in published:
+            with self.subTest(wheel=entry["wheel"]):
+                self.assertIn(f'aria-label="wheel {entry["wheel"]}"', page)
+                for n in (1, 2):
+                    self.assertIn(f'aria-label="build {n} of {entry["wheel"]}"', page)
+        self.assertEqual(page.count('scope="col"'), 8)
+        self.assertIn('aria-labelledby="published-wheels"', page)
+        self.assertNotIn("<script", page)
+
     def test_withdrawn_wheel_has_no_install_command(self):
         filename = "tiktoken-0.14.0-cp314-cp314-win_arm64.whl"
         page = (self.build([wheel()], {"tiktoken": [pypi_file(filename)]}) / "index.html").read_text()
