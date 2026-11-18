@@ -55,7 +55,8 @@ def example_lock(job):
 def example_tools(job):
     lock = example_lock(job)
     return {"lock_sha256": build_tool_lock.digest(lock),
-            "packages": gap_wheels.expected_packages(lock), "python": "3.14.10",
+            "packages": gap_wheels.expected_packages(lock),
+            "repair_tools": gap_wheels.expected_repair_tools(job["target"]), "python": "3.14.10",
             "python_build": "3.14.10 (test)", "runner_image": "mock-runner-version",
             "compiler": {"cc": "cl 19.0", "link": "link 14.0"}}
 
