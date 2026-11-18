@@ -28,10 +28,13 @@ def project_zip(requirements='["setuptools>=70"]'):
 
 def project_lock(name="demo", target=TARGET):
     wheel_name = "setuptools-80.0.0-py3-none-any.whl"
+    pip_file = "pip-26.3-py3-none-any.whl"
     return {"schema": 1, "name": name, "version": "1.0", "target": target,
             "sdist": f"{name}-1.0.zip", "sdist_url": FILE_URL + f"{name}-1.0.zip",
             "sdist_sha256": "a" * 64,
-            "wheels": [{"name": "setuptools", "version": "80.0.0", "filename": wheel_name,
+            "wheels": [{"name": "pip", "version": "26.3", "filename": pip_file,
+                        "url": FILE_URL + pip_file, "sha256": "f" * 64},
+                       {"name": "setuptools", "version": "80.0.0", "filename": wheel_name,
                         "url": FILE_URL + wheel_name, "sha256": "e" * 64}]}
 
 
@@ -70,20 +73,24 @@ class Coordinator(unittest.TestCase):
         source = project_zip()
         wheel = b"fixed wheel bytes"
         filename = "setuptools-80.0.0-py3-none-any.whl"
+        pip_filename = "pip-26.3-py3-none-any.whl"
         sdist_item = {"filename": "demo-1.0.zip", "packagetype": "sdist", "url": FILE_URL + "demo-1.0.zip",
                       "digests": {"sha256": hashlib.sha256(source).hexdigest()}}
         wheel_item = {"filename": filename, "url": FILE_URL + filename,
                       "digests": {"sha256": hashlib.sha256(wheel).hexdigest()}}
+        pip_item = {"filename": pip_filename, "url": FILE_URL + pip_filename,
+                    "digests": {"sha256": hashlib.sha256(wheel).hexdigest()}}
         seen = []
 
         def metadata(name, version):
-            self.assertIn((name, version), (("demo", "1.0"), ("setuptools", "80.0.0")))
-            return {"urls": [sdist_item] if name == "demo" else [wheel_item]}
+            self.assertIn((name, version), (("demo", "1.0"), ("setuptools", "80.0.0"), ("pip", "26.3")))
+            return {"urls": [sdist_item] if name == "demo" else [wheel_item] if name == "setuptools" else [pip_item]}
 
         def command(args, **kw):
             seen.append(args)
             (Path(args[-1]) / filename).parent.mkdir(parents=True, exist_ok=True)
             (Path(args[-1]) / filename).write_bytes(wheel)
+            (Path(args[-1]) / pip_filename).write_bytes(wheel)
             return subprocess.CompletedProcess(args, 0, "", "")
 
         with mock.patch.object(build_tool_lock, "_metadata", side_effect=metadata), \
@@ -92,7 +99,7 @@ class Coordinator(unittest.TestCase):
             lock = build_tool_lock.resolve({"name": "demo", "version": "1.0", "target": TARGET})
         self.assertTrue(build_tool_lock.validate(lock))
         self.assertEqual(lock["sdist_sha256"], hashlib.sha256(source).hexdigest())
-        self.assertEqual(lock["wheels"][0]["sha256"], hashlib.sha256(wheel).hexdigest())
+        self.assertEqual({w["sha256"] for w in lock["wheels"]}, {hashlib.sha256(wheel).hexdigest()})
         self.assertIn("--only-binary=:all:", seen[0])
         self.assertIn("--platform", seen[0])
         self.assertIn("win_arm64", seen[0])
@@ -171,6 +178,7 @@ class Coordinator(unittest.TestCase):
             self.assertIn("--no-index", calls[0])
             text = (work / "build-requirements.txt").read_text()
             self.assertIn("setuptools==80.0.0 --hash=sha256:", text)
+            self.assertIn("pip==26.3 --hash=sha256:", text)
 
 
 class TrustedPublication(unittest.TestCase):
