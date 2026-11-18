@@ -1,11 +1,12 @@
-# Build-tool provenance proposal (issue #4)
+# Build-tool provenance implementation (issue #4)
 
 **Status:** Implemented on branch `design/4-build-tool-provenance` in the contributor's fork.
 The production pipeline is unchanged upstream until maintainers review and merge the contribution.
-The new coordinator locks static PEP 517 dependencies (including pip 26.3), both build jobs use the same lock,
+The new coordinator locks static PEP 517 dependencies (including pip 26.3), plus Linux repair tools and their
+transitive dependencies, and both build jobs use the same lock,
 and the trusted merge and publication paths reject missing or mismatched provenance.
 
-## Current boundary
+## Previous boundary (before this change)
 
 `scripts/gap_wheels.py:plan` emits two jobs per (name, version, target). The trusted coordinator dispatches
 `.github/workflows/gap-wheel-build.yml` twice. In each untrusted build, `run_build` downloads the PyPI sdist and
@@ -61,7 +62,7 @@ Windows also floats to the current GitHub-hosted runner image and CPython patch 
 ## Implementation map
 
 - scripts/build_tool_lock.py: read a verified sdist as data, refuse unsupported PEP 517 inputs, resolve wheels
-  on PyPI, freeze their file hashes and install the exact backend environment offline.
+  on PyPI, freeze their file hashes and install the exact backend and Linux repair environment offline.
 - scripts/gap_wheels.py: lock during plan, require the coordinator artifact on build, record interpreter,
   compiler, linker and runner versions, compare both builds against the trusted lock, and pass verified
   provenance through the manifest, staging and publishing.
@@ -71,10 +72,9 @@ Windows also floats to the current GitHub-hosted runner image and CPython patch 
 - tests/test_build_tool_lock.py and tests/test_gap_wheels.py: direct offline regression coverage.
 
 **Verified in fork:** The existing tests and new security tests pass under CPython 3.14. A separate
-non-publishing Actions probe resolved real build requirements for lz4 and tiktoken, built lz4 from its
-verified source archive using only pinned build dependencies, and installed coordinator-resolved
-tool wheels on both Windows x64 and Windows ARM. The test workflow is temporary and is removed
-from the final change.
+non-publishing Actions probe resolved real build requirements for lz4 and tiktoken, built and repaired lz4 from its
+verified source archive using only pinned build and repair tools, and installed coordinator-resolved
+tool wheels on both Windows x64 and Windows ARM. The temporary test workflows are removed from the final change.
 
 **Limits:** A malicious sdist may execute arbitrary code during a build, as before. This lock ensures
 the tools pip deliberately installs for the PEP 517 build are hash-pinned; it is not a sandbox for
