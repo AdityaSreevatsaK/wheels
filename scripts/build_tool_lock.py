@@ -31,6 +31,7 @@ FILES = "https://files.pythonhosted.org/packages/"
 MAX_DOWNLOAD = 48_000_000
 MAX_PROJECT = 131_072
 PINNED_PIP = "pip==26.3"  # the builder itself must also be a hash-verified wheel
+LINUX_REPAIR_TOOLS = ("auditwheel==6.8.2", "patchelf==0.19.1.0")
 SHA = re.compile(r"[0-9a-f]{64}\Z")
 NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 WHEEL = re.compile(r"[A-Za-z0-9._+!-]{1,200}\.whl\Z")
@@ -200,7 +201,9 @@ def resolve(pair: dict) -> dict:
     abi = f"cp{digits}{'t' if target.split()[0].endswith('t') else ''}"
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        (root / "requires.txt").write_text("\n".join([*requirements, PINNED_PIP]) + "\n", encoding="utf-8")
+        extra_tools = LINUX_REPAIR_TOOLS if ("linux-" in target or "musl-" in target) else ()
+        (root / "requires.txt").write_text("\n".join([*requirements, PINNED_PIP, *extra_tools]) + "\n",
+                                             encoding="utf-8")
         cmd = [sys.executable, "-m", "pip", "--isolated", "download", "--index-url", "https://pypi.org/simple/",
                "--only-binary=:all:", "--no-cache-dir", "--disable-pip-version-check",
                "--python-version", python_version, "--implementation", "cp", "--abi", abi]
