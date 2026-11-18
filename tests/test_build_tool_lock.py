@@ -1,6 +1,5 @@
 """Offline security regression tests for the coordinator build-tool lock and publication provenance."""
 
-import copy
 import hashlib
 import io
 import json
