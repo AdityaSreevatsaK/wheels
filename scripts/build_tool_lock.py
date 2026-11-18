@@ -111,9 +111,9 @@ def _project_requirements(archive: bytes, filename: str) -> list[str]:
         # These go into a pip requirements file: never allow an sdist to add index options,
         # includes, URLs or lines that change the resolver's trust boundary.
         if any(
-            "\\n" in req or "\\r" in req or req.lstrip().startswith(("-", "#"))
-            or any(part in req for part in ("@", "://", "\\\\", "--", "/"))
-            or re.fullmatch(r"\\s*[A-Za-z0-9][A-Za-z0-9._-]{0,120}.*", req) is None
+            "\n" in req or "\r" in req or req.lstrip().startswith(("-", "#"))
+            or any(part in req for part in ("@", "://", "\\", "--", "/"))
+            or re.fullmatch(r"\s*[A-Za-z0-9][A-Za-z0-9._-]{0,120}.*", req) is None
             for req in reqs
         ):
             raise LockError("unsupported or unsafe PEP 508 build requirement")
