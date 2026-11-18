@@ -1878,8 +1878,11 @@ def take_wheel(repo: str, wheel: dict) -> tuple[bytes | None, str | None]:
 
 
 def cmd_stage(args: argparse.Namespace) -> int:
-    """Write STAGED/<wheel> and STAGED/staged.json for the verified wheels that may be published, and (for the
-    workflow) `staged`, the same list, and `tests`, the targets to install-test, as GitHub outputs."""
+    """Stage verified wheels and write STAGED/staged.json with complete provenance.
+
+    GitHub outputs contain only the staged-file SHA-256, staged count and test matrix,
+    not the potentially large wheel/provenance records.
+    """
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
     out = Path(args.staged)
     out.mkdir(parents=True, exist_ok=True)
