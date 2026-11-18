@@ -173,7 +173,7 @@ class Index(unittest.TestCase):
             page,
         )
         self.assertIn(f'<small title="{SHA}">{SHA[:12]}</small>', page)
-        self.assertIn('<div class="matrix-scroll" tabindex="0" role="region" aria-labelledby="published-wheels">', page)
+        self.assertIn('<div class="matrix-scroll" tabindex="0" role="region" aria-labelledby="published_wheels">', page)
         self.assertNotIn("<script", page)
 
     def test_published_table_has_unique_accessible_links_and_keyboard_scrolling(self):
@@ -185,10 +185,11 @@ class Index(unittest.TestCase):
                           "https://github.com/wheelgap/tracker/actions/runs/4"]),
         ]
         page = (self.build(wheels) / "index.html").read_text(encoding="utf-8")
-        heading = '<h2 id="published-wheels">Published wheels</h2>'
+        heading = '<h2 id="published_wheels">Published wheels</h2>'
         self.assertIn(heading, page)
+        self.assertEqual(page.count('id="published_wheels"'), 1)
         self.assertIn(
-            '<div class="matrix-scroll" tabindex="0" role="region" aria-labelledby="published-wheels">',
+            '<div class="matrix-scroll" tabindex="0" role="region" aria-labelledby="published_wheels">',
             page,
         )
         thead = page.split("<thead>", 1)[1].split("</thead>", 1)[0]
@@ -213,7 +214,7 @@ class Index(unittest.TestCase):
                 for n in (1, 2):
                     self.assertIn(f'aria-label="build {n} of {entry["wheel"]}"', page)
         self.assertEqual(page.count('scope="col"'), 8)
-        self.assertIn('aria-labelledby="published-wheels"', page)
+        self.assertIn('aria-labelledby="published_wheels"', page)
         self.assertNotIn("<script", page)
 
     def test_withdrawn_wheel_has_no_install_command(self):

@@ -359,8 +359,9 @@ def human_page(
                 f"<td>{e(gone.get(w['wheel'], 'in the index'))}</td></tr>"
             )
     count = sum(len(v) for v in by_project.values()) - len(gone)
+    # The heading's id has an underscore so no package row's id (a canonical name: a-z, 0-9 and -) can clash with it.
     table = (
-        '        <div class="matrix-scroll" tabindex="0" role="region" aria-labelledby="published-wheels"><table class="matrix">\n'
+        '        <div class="matrix-scroll" tabindex="0" role="region" aria-labelledby="published_wheels"><table class="matrix">\n'
         '          <thead><tr><th scope="col">Package</th><th scope="col">Version</th>'
         '<th scope="col">Target</th><th scope="col">Verified</th><th scope="col">Builds</th>'
         '<th scope="col">File</th><th scope="col">Install</th><th scope="col">Status</th></tr></thead>\n'
@@ -425,7 +426,7 @@ tokenizers = {{ index = "wheelgap" }}</code></pre>
       <p>These are meant as a stopgap until your release ships its own wheel. Once it does, ours drops out of the index within the hour, and the table below says so. If you'd rather we didn't host any wheels for your project, <a href="{e(OPT_OUT_URL)}">open an opt-out issue</a> and they come down, and later batches skip it. Each row below links to both build runs if you want to see the build that worked.</p>
     </section>
     <section>
-      <h2 id="published-wheels">Published wheels</h2>
+      <h2 id="published_wheels">Published wheels</h2>
 {table}    </section>
   </main>
 </body>
