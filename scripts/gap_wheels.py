@@ -52,8 +52,8 @@ import hashlib
 import io
 import json
 import os
-import posixpath
 import platform
+import posixpath
 import re
 import shutil
 import subprocess
@@ -413,7 +413,7 @@ def namespace_folders(wheel: Path) -> list[str]:
 def _tool_version(cmd: list[str]) -> str:
     """Record the version text of the compiler actually available on this runner."""
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=20)
+        result = subprocess.run(cmd, check=False, capture_output=True, text=True, errors="replace", timeout=20)
         command = str(Path(cmd[0]).resolve()) if Path(cmd[0]).is_file() else (shutil.which(cmd[0]) or cmd[0])
         return (command + ": " + " ".join((result.stdout + "\n" + result.stderr).split()))[:450]
     except (OSError, subprocess.SubprocessError):
