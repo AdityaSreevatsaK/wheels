@@ -334,21 +334,35 @@ def resolve(pair: dict) -> dict:
     return result
 
 
-def lock_plan(jobs: list[dict]) -> tuple[list[dict], dict]:
-    """Keep only pairs whose build tools were locked. The coordinator never dispatches skipped pairs."""
+def lock_plan(jobs: list[dict], report: list[tuple[str, str]] | None = None) -> tuple[list[dict], dict]:
+    """Resolve at most four pairs at once; skip unsupported pairs without publishing them."""
     pairs = {str(j["id"]): j for j in jobs}
-    locks = {}
-    for pid, job in pairs.items():
-        try:
-            lock = resolve(job)
-            locks[pid] = lock
-            print(f"locked {job['name']} {job['version']} {job['target']}: {len(lock['wheels'])} tool wheels",
-                  file=sys.stderr)
-        except (LockError, OSError, subprocess.TimeoutExpired) as exc:
-            print(f"skipping unpinned {job['name']} {job['version']} {job['target']}: {exc}",
-                  file=sys.stderr)
-    filtered = [{**j, "lock_sha256": digest(locks[str(j["id"])])}
-                for j in jobs if str(j["id"]) in locks]
+    locks: dict[str, dict] = {}
+    outcomes: dict[str, str] = {}
+    if not pairs:
+        return [], {"schema": 1, "pairs": locks}
+    with ThreadPoolExecutor(max_workers=min(RESOLVE_WORKERS, len(pairs))) as pool:
+        futures = {pool.submit(resolve, job): pid for pid, job in pairs.items()}
+        for future in as_completed(futures):
+            pid = futures[future]
+            job = pairs[pid]
+            try:
+                lock = future.result()
+                locks[pid] = lock
+                status = f"locked ({len(lock['wheels'])} build, {len(lock['repair_wheels'])} repair wheels)"
+            except (LockError, OSError, subprocess.TimeoutExpired) as exc:
+                status = f"skipped: {type(exc).__name__}: {exc}"
+            outcomes[pid] = status
+            print(f"{job['name']} {job['version']} {job['target']}: {status}", file=sys.stderr)
+    if report is not None:
+        report.extend(
+            (f"{pairs[pid]['name']} {pairs[pid]['version']} {pairs[pid]['target']}", outcomes[pid])
+            for pid in pairs
+        )
+    filtered = [
+        {**j, "lock_sha256": digest(locks[str(j["id"])])}
+        for j in jobs if str(j["id"]) in locks
+    ]
     return filtered, {"schema": 1, "pairs": locks}
 
 
