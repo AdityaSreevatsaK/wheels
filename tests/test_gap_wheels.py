@@ -14,7 +14,7 @@ import zipfile
 from pathlib import Path
 from unittest import mock
 
-from scripts import gap_wheels
+from scripts import build_tool_lock, gap_wheels
 
 
 def row(name, version, target, **over):
@@ -39,6 +39,36 @@ BUILDS = {
 }
 
 
+
+def example_lock(job):
+    name, version, target = job["name"], job["version"], job["target"]
+    project = build_tool_lock.canonical(name)
+    wheel_name = "setuptools-80.0.0-py3-none-any.whl"
+    sdist = f"{name}-{version}.tar.gz"
+    return {"schema": 1, "name": project, "version": version, "target": target,
+            "sdist": sdist, "sdist_url": f"https://files.pythonhosted.org/packages/x/{sdist}",
+            "sdist_sha256": "a" * 64,
+            "wheels": [{"name": "setuptools", "version": "80.0.0", "filename": wheel_name,
+                        "url": f"https://files.pythonhosted.org/packages/x/{wheel_name}", "sha256": "e" * 64}]}
+
+
+def example_tools(job):
+    lock = example_lock(job)
+    return {"lock_sha256": build_tool_lock.digest(lock),
+            "packages": gap_wheels.expected_packages(lock), "python": "3.14.10",
+            "python_build": "3.14.10 (test)", "runner_image": "mock-runner-version",
+            "compiler": {"cc": "cl 19.0", "link": "link 14.0"}}
+
+
+def attach_locks(jobs, path=None):
+    pairs = {str(job["id"]): example_lock(job) for job in jobs}
+    for job in jobs:
+        job["lock_sha256"] = build_tool_lock.digest(pairs[str(job["id"])])
+    if path is not None:
+        path.write_text(json.dumps({"schema": 1, "pairs": pairs}))
+    return jobs
+
+
 def good(job, **over):
     platform = {"3.14 win-arm64": "cp314-cp314-win_arm64", "3.14t win-arm64": "cp314-cp314t-win_arm64",
                 "3.14 musl-aarch64": "cp314-cp314-musllinux_1_2_aarch64"}[job["target"]]  # fmt: skip
@@ -54,6 +84,7 @@ def good(job, **over):
         "wheel": f"{job['name']}-{job['version']}-{platform}.whl",
         "sha256": "b" * 64,
         "installs": True if job["attempt"] == 1 else None,
+        "tools": example_tools(job),
     }
     r.update(over)
     return r
@@ -187,7 +218,7 @@ class Merge(unittest.TestCase):
         jobs = gap_wheels.plan(BUILDS, 2)
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
-            (tmp / "plan.json").write_text(json.dumps(jobs))
+            (tmp / "plan.json").write_text(json.dumps(attach_locks(jobs, tmp / "locks.json")))
             for job in jobs:
                 d = tmp / "results" / f"result-{job['id']}-{job['attempt']}"
                 d.mkdir(parents=True)
@@ -198,7 +229,7 @@ class Merge(unittest.TestCase):
             (big / "result.json").write_text("x" * 20_000)  # not in the plan: never read
             sdists = {"lz4-4.4.5.tar.gz": "a" * 64, "tiktoken-0.14.0.tar.gz": "a" * 64}
             with mock.patch.object(gap_wheels, "pypi_sdists", lambda name, version: sdists):
-                gap_wheels.main(["merge", str(tmp / "results"), "--plan", str(tmp / "plan.json"), "--out",
+                gap_wheels.main(["merge", str(tmp / "results"), "--plan", str(tmp / "plan.json"), "--locks", str(tmp / "locks.json"), "--out",
                                  str(tmp / "manifest.json"), "--summary", str(tmp / "summary.md")])  # fmt: skip
             manifest = json.loads((tmp / "manifest.json").read_text())
             summary = (tmp / "summary.md").read_text()
@@ -308,7 +339,7 @@ class Runs(unittest.TestCase):
         results = {11: good(self.jobs[0]), 12: good(self.jobs[1])}
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
-            (tmp / "plan.json").write_text(json.dumps(self.jobs))
+            (tmp / "plan.json").write_text(json.dumps(attach_locks(self.jobs, tmp / "locks.json")))
             with (
                 mock.patch.object(gap_wheels, "list_runs", return_value=runs),
                 mock.patch.object(gap_wheels, "fetch_result", lambda repo, run: (json.dumps(results[run["id"]]).encode(), b"{}")),
@@ -320,7 +351,7 @@ class Runs(unittest.TestCase):
                               "0-2": "https://github.com/o/r/actions/runs/12"})  # fmt: skip
             self.assertEqual(json.loads((tmp / "r" / "result-0-2" / "result.json").read_text()), results[12])
             with mock.patch.object(gap_wheels, "pypi_sdists", lambda n, v: {"tiktoken-0.14.0.tar.gz": "a" * 64}):
-                gap_wheels.main(["merge", str(tmp / "r"), "--plan", str(tmp / "plan.json"), "--out", str(tmp / "m.json")])
+                gap_wheels.main(["merge", str(tmp / "r"), "--plan", str(tmp / "plan.json"), "--locks", str(tmp / "locks.json"), "--out", str(tmp / "m.json")])
             wheel = json.loads((tmp / "m.json").read_text())["wheels"][0]
         self.assertEqual(wheel["builds"], ["https://github.com/o/r/actions/runs/11", "https://github.com/o/r/actions/runs/12"])
 
@@ -359,14 +390,14 @@ class Members(unittest.TestCase):
         jobs = gap_wheels.plan(BUILDS, 1, {"tiktoken"})
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
-            (tmp / "plan.json").write_text(json.dumps(jobs))
+            (tmp / "plan.json").write_text(json.dumps(attach_locks(jobs, tmp / "locks.json")))
             for job in jobs:
                 d = tmp / "r" / f"result-{job['id']}-{job['attempt']}"
                 d.mkdir(parents=True)
                 (d / "result.json").write_text(json.dumps(good(job)))
                 (d / "members.json").write_text("[" * 200_000 + "]" * 200_000)
             with mock.patch.object(gap_wheels, "pypi_sdists", lambda n, v: {"tiktoken-0.14.0.tar.gz": "a" * 64}):
-                gap_wheels.main(["merge", str(tmp / "r"), "--plan", str(tmp / "plan.json"), "--out", str(tmp / "m.json")])
+                gap_wheels.main(["merge", str(tmp / "r"), "--plan", str(tmp / "plan.json"), "--locks", str(tmp / "locks.json"), "--out", str(tmp / "m.json")])
             self.assertEqual(len(json.loads((tmp / "m.json").read_text())["wheels"]), 1)
 
     def test_differing_ignores_untrusted_junk(self):
@@ -379,21 +410,21 @@ class Members(unittest.TestCase):
         jobs = gap_wheels.plan(BUILDS, 1, {"tiktoken"})
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
-            (tmp / "plan.json").write_text(json.dumps(jobs))
+            (tmp / "plan.json").write_text(json.dumps(attach_locks(jobs, tmp / "locks.json")))
             for job, sha, so in ((jobs[0], "b" * 64, "1" * 64), (jobs[1], "c" * 64, "2" * 64)):
                 d = tmp / "r" / f"result-{job['id']}-{job['attempt']}"
                 d.mkdir(parents=True)
                 (d / "result.json").write_text(json.dumps(good(job, sha256=sha)))
                 (d / "members.json").write_text(json.dumps({"tiktoken/_tiktoken.pyd": so, "tiktoken/core.py": "3" * 64}))
             with mock.patch.object(gap_wheels, "pypi_sdists", lambda n, v: {"tiktoken-0.14.0.tar.gz": "a" * 64}):
-                gap_wheels.main(["merge", str(tmp / "r"), "--plan", str(tmp / "plan.json"), "--out", str(tmp / "m.json"),
+                gap_wheels.main(["merge", str(tmp / "r"), "--plan", str(tmp / "plan.json"), "--locks", str(tmp / "locks.json"), "--out", str(tmp / "m.json"),
                                  "--summary", str(tmp / "s.md")])  # fmt: skip
             self.assertIn("the two builds differ, in `tiktoken/_tiktoken.pyd` |", (tmp / "s.md").read_text())
 
 
 class Dispatch(unittest.TestCase):
     def setUp(self):
-        self.jobs = gap_wheels.plan(BUILDS, 2)
+        self.jobs = attach_locks(gap_wheels.plan(BUILDS, 2))
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.plan = Path(self.tmp.name) / "plan.json"
@@ -425,7 +456,7 @@ class Dispatch(unittest.TestCase):
 
     def test_an_image_build_gets_the_images_interpreter(self):
         jobs = [j for j in gap_wheels.plan(BUILDS, 10) if j["target"] == "3.14 musl-aarch64"]
-        self.plan.write_text(json.dumps(jobs))
+        self.plan.write_text(json.dumps(attach_locks(jobs)))
         self.run_dispatch(iter([SHA] * len(jobs)))
         started = self.started()
         self.assertTrue(started)
@@ -485,7 +516,7 @@ class Rotation(unittest.TestCase):
 
     def test_members_too_big_to_list_still_leave_the_result(self):
         def fake_run_build(name, version, attempt, work, members, keep=None, plat=None, tag=None,
-                           platform_pattern=None):
+                           platform_pattern=None, lock=None, lock_sha256=None):
             members.update({f"pkg/f{i}.py": "a" * 64 for i in range(gap_wheels.MAX_MEMBERS + 1)})
             return {"sdist": None, "sdist_sha256": None, "wheel": None, "sha256": None, "installs": None}
 
@@ -493,10 +524,14 @@ class Rotation(unittest.TestCase):
             out = Path(tmp) / "result.json"
             with (
                 mock.patch.object(gap_wheels, "run_build", fake_run_build),
+                mock.patch.object(gap_wheels.build_tool_lock, "load_lock", return_value=example_lock(
+                    {"name": "tiktoken", "version": "0.14.0", "target": "3.14 win-arm64"})),
                 mock.patch.object(gap_wheels.build_lab, "interpreter_problem", lambda target: None),
             ):
                 gap_wheels.main(["build", "--name", "tiktoken", "--version", "0.14.0", "--target", "3.14 win-arm64",
-                                 "--attempt", "1", "--runner", "windows-11-arm", "--out", str(out)])  # fmt: skip
+                                 "--attempt", "1", "--runner", "windows-11-arm",
+                                 "--lock-bundle", "test-lock.json", "--lock-sha256", "e" * 64, "--pair-id", "0",
+                                 "--out", str(out)])  # fmt: skip
             self.assertEqual(json.loads(out.read_text())["name"], "tiktoken")
             self.assertEqual(json.loads((Path(tmp) / "members.json").read_text()), {})
 
@@ -512,6 +547,7 @@ MUSL = "lz4-0.14.0-cp314-cp314-musllinux_1_2_aarch64.whl"
 def verified(name="tiktoken", wheel=WIN, sha="c" * 64, target="3.14 win-arm64"):
     return {"name": name, "version": "0.14.0", "target": target, "wheel": wheel, "sha256": sha,
             "sdist": f"{name}-0.14.0.tar.gz", "sdist_sha256": "a" * 64,
+            "tools": example_tools({"name": name, "version": "0.14.0", "target": target}),
             "builds": ["https://github.com/wheelgap/tracker/actions/runs/11",
                        "https://github.com/wheelgap/tracker/actions/runs/12"]}  # fmt: skip
 
@@ -887,17 +923,21 @@ class KeepTheWheel(unittest.TestCase):
         seen = {}
 
         def fake_run_build(name, version, attempt, work, members, keep=None, plat=None, tag=None,
-                           platform_pattern=None):
+                           platform_pattern=None, lock=None, lock_sha256=None):
             seen["keep"] = keep
             return {"sdist": None, "sdist_sha256": None, "wheel": None, "sha256": None, "installs": None}
 
         with tempfile.TemporaryDirectory() as tmp:
             with (
                 mock.patch.object(gap_wheels, "run_build", fake_run_build),
+                mock.patch.object(gap_wheels.build_tool_lock, "load_lock", return_value=example_lock(
+                    {"name": "tiktoken", "version": "0.14.0", "target": "3.14 win-arm64"})),
                 mock.patch.object(gap_wheels.build_lab, "interpreter_problem", lambda target: None),
             ):
                 gap_wheels.main(["build", "--name", "tiktoken", "--version", "0.14.0", "--target", "3.14 win-arm64",
-                                 "--attempt", "2", "--runner", "windows-11-arm", "--out", str(Path(tmp) / "r.json"),
+                                 "--attempt", "2", "--runner", "windows-11-arm",
+                                 "--lock-bundle", "test-lock.json", "--lock-sha256", "e" * 64, "--pair-id", "0",
+                                 "--out", str(Path(tmp) / "r.json"),
                                  "--wheel-dir", str(Path(tmp) / "wheel")])  # fmt: skip
         self.assertEqual(seen["keep"], Path(tmp) / "wheel")
 
