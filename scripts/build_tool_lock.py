@@ -167,7 +167,8 @@ def _archive_info(item: dict, filename: str) -> dict:
 
 def validate(lock: object) -> bool:
     if not isinstance(lock, dict) or set(lock) != {
-        "schema", "name", "version", "target", "sdist", "sdist_url", "sdist_sha256", "wheels"
+        "schema", "name", "version", "target", "sdist", "sdist_url",
+        "sdist_sha256", "wheels", "repair_wheels"
     } or lock["schema"] != 1:
         return False
     if not (isinstance(lock["name"], str) and NAME.fullmatch(lock["name"])
@@ -178,21 +179,32 @@ def validate(lock: object) -> bool:
             and urllib.parse.urlsplit(lock["sdist_url"]).path.rsplit("/", 1)[-1] == lock["sdist"]
             and isinstance(lock["sdist_sha256"], str) and SHA.fullmatch(lock["sdist_sha256"])):
         return False
-    if not isinstance(lock["wheels"], list) or not 0 < len(lock["wheels"]) <= 100:
+    repair = lock["repair_wheels"]
+    if (not isinstance(lock["wheels"], list) or not 0 < len(lock["wheels"]) <= 100
+            or not isinstance(repair, list) or len(repair) > 100):
         return False
-    names = set()
-    for item in lock["wheels"]:
-        if not isinstance(item, dict) or set(item) != {"name", "version", "filename", "url", "sha256"}:
+    if bool(repair) != ("linux-" in lock["target"] or "musl-" in lock["target"]):
+        return False
+    for group in (lock["wheels"], repair):
+        names = set()
+        for item in group:
+            if not isinstance(item, dict) or set(item) != {"name", "version", "filename", "url", "sha256"}:
+                return False
+            name, version, filename, url, sha = (item[k] for k in ("name", "version", "filename", "url", "sha256"))
+            if not (isinstance(name, str) and NAME.fullmatch(name) and name not in names
+                    and isinstance(version, str) and re.fullmatch(r"[A-Za-z0-9._+!-]{1,100}", version)
+                    and isinstance(filename, str) and WHEEL.fullmatch(filename)
+                    and isinstance(url, str) and url.startswith(FILES)
+                    and urllib.parse.urlsplit(url).path.rsplit("/", 1)[-1] == filename
+                    and isinstance(sha, str) and SHA.fullmatch(sha)):
+                return False
+            names.add(name)
+        if group and not ("pip" in names):
             return False
-        name, version, filename, url, sha = (item[k] for k in ("name", "version", "filename", "url", "sha256"))
-        if not (isinstance(name, str) and NAME.fullmatch(name) and name not in names
-                and isinstance(version, str) and re.fullmatch(r"[A-Za-z0-9._+!-]{1,100}", version)
-                and isinstance(filename, str) and WHEEL.fullmatch(filename)
-                and isinstance(url, str) and url.startswith(FILES)
-                and urllib.parse.urlsplit(url).path.rsplit("/", 1)[-1] == filename
-                and isinstance(sha, str) and SHA.fullmatch(sha)):
-            return False
-        names.add(name)
+    if repair and not {req.split("==")[0] for req in LINUX_REPAIR_TOOLS}.issubset(
+        {w["name"] for w in repair}
+    ):
+        return False
     return True
 
 
