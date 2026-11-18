@@ -26,6 +26,7 @@ jobs:
       VERSION: ${{ matrix.version }}
       TARGET: ${{ matrix.target }}
       RUNNER_LABEL: ${{ matrix.runner }}
+      RUNNER: ${{ matrix.runner }}
       IMAGE: ${{ matrix.image }}
       INTERPRETER: ${{ matrix.interpreter }}
     steps:
