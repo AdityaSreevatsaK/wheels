@@ -490,6 +490,9 @@ def _msvc_tools(target: str) -> tuple[str, str]:
                 active[key] = value
     if not active.get("VCINSTALLDIR") or not active.get("VCToolsInstallDir"):
         return "", ""
+    # vcvarsall may default to a different toolset inside the same VS instance.
+    if Path(active["VCToolsInstallDir"]).resolve() != compiler.parents[3].resolve():
+        return "", ""
     os.environ.update(active)
     os.environ["DISTUTILS_USE_SDK"] = "1"
     os.environ["MSSdk"] = "1"
