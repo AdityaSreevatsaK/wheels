@@ -213,7 +213,7 @@ def wheel_members(wheel: Path) -> dict[str, str]:
 
 # Pinned, and installed into a venv of their own (not the build's): auditwheel bundles a wheel's libraries and
 # patchelf rewrites their paths. SOURCE_DATE_EPOCH (build_env) fixes the repaired zip's timestamps.
-REPAIR_TOOLS = ("auditwheel==6.8.2", "patchelf==0.19.1.0")
+REPAIR_TOOLS = build_lab.REPAIR_TOOLS
 # The Windows counterpart: delvewheel bundles the DLLs a wheel's binaries import that a user's machine may not have
 # (the VC++ runtime's msvcp140.dll, vcomp140.dll) into <dist>.libs/, each under a name with its hash, rewrites the
 # imports to those names and adds the folder to the DLL search path in the package's __init__.py. A mangled name
