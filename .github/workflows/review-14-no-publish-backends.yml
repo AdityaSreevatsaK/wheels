@@ -1,0 +1,88 @@
+name: Temporary no-publish backend build probes (PR 14)
+
+on:
+  push:
+    branches: [design/4-build-tool-provenance]
+
+permissions:
+  contents: read
+
+jobs:
+  backend-build:
+    name: ${{ matrix.name }} ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: matplotlib, version: "3.11.2", target: "3.14 musl-aarch64", runner: ubuntu-24.04-arm, image: "python:3.14-alpine@sha256:5862d971d1f0ae26b258cefa4e893556b1d3aba81bd2ff30888704ad378bab67", interpreter: python, python: ""}
+          - {name: lightgbm, version: "4.7.0", target: "3.14 musl-aarch64", runner: ubuntu-24.04-arm, image: "python:3.14-alpine@sha256:5862d971d1f0ae26b258cefa4e893556b1d3aba81bd2ff30888704ad378bab67", interpreter: python, python: ""}
+          - {name: safetensors, version: "0.8.0", target: "3.14t linux-x86_64", runner: ubuntu-24.04, image: "quay.io/pypa/manylinux_2_28_x86_64@sha256:d086f64cddcace250ef0f0073583c51b8298159303290a730c9f59bd91edfd2c", interpreter: "/opt/python/cp314-cp314t/bin/python", python: ""}
+          - {name: lightgbm, version: "4.7.0", target: "3.14 win-arm64", runner: windows-11-arm, image: "", interpreter: "", python: "3.14"}
+          - {name: ormsgpack, version: "1.13.1", target: "3.14t win-arm64", runner: windows-11-arm, image: "", interpreter: "", python: "3.14t"}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 85
+    env:
+      NAME: ${{ matrix.name }}
+      VERSION: ${{ matrix.version }}
+      TARGET: ${{ matrix.target }}
+      RUNNER_LABEL: ${{ matrix.runner }}
+      IMAGE: ${{ matrix.image }}
+      INTERPRETER: ${{ matrix.interpreter }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: matrix.image == ''
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.9"
+          enable-cache: false
+      - name: Resolve and hash-pin known backend tool requirements without running an sdist
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts import build_tool_lock
+          pair = {key.lower(): os.environ[key] for key in ("NAME", "VERSION", "TARGET")}
+          lock = build_tool_lock.resolve(pair)
+          folder = Path(os.environ["RUNNER_TEMP"]) / "locks"
+          folder.mkdir(exist_ok=True)
+          bundle = {"schema": 1, "pairs": {"0": lock}}
+          (folder / "build-tool-locks.json").write_text(json.dumps(bundle), encoding="utf-8")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as out:
+              out.write(f"LOCK_SHA256={build_tool_lock.digest(lock)}\n")
+          print(f"Locked {pair['name']} {pair['target']}: {len(lock['wheels'])} build and {len(lock['repair_wheels'])} repair wheels")
+          PY
+      - name: Real no-publish build in pinned target Linux image
+        if: matrix.image != ''
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          docker run --rm -v "$PWD:/lab:ro" -v "$RUNNER_TEMP/out:/out" -v "$RUNNER_TEMP/locks:/locks:ro" -w /lab \
+            -e NAME -e VERSION -e TARGET -e RUNNER -e INTERPRETER -e LOCK_SHA256 -e ATTEMPT=1 \
+            "$IMAGE" sh scripts/container_build.sh
+      - name: Real no-publish build on target Windows runner
+        if: matrix.image == ''
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/wheel"
+          python scripts/gap_wheels.py build --name "$NAME" --version "$VERSION" --target "$TARGET" \
+            --attempt 1 --runner "$RUNNER_LABEL" --out result.json --wheel-dir "$RUNNER_TEMP/wheel" \
+            --lock-bundle "$RUNNER_TEMP/locks/build-tool-locks.json" --lock-sha256 "$LOCK_SHA256" --pair-id 0
+      - name: Assert a wheel was built and installed, without publishing
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          path = Path(os.environ["RUNNER_TEMP"]) / "out" / "result.json" if os.environ["IMAGE"] else Path("result.json")
+          assert path.is_file(), f"No result.json at {path}"
+          result = json.loads(path.read_text(encoding="utf-8"))
+          assert result["wheel"] and result["sha256"], f"Backend failed to produce wheel: {result['name']} on {result['target']}"
+          assert result["installs"] is True, f"Built wheel did not install: {result['wheel']}"
+          print("Real no-publish build succeeded:", result["wheel"])
+          PY
