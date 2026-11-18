@@ -58,6 +58,29 @@ class ReadSdist(unittest.TestCase):
             archive.addfile(member, io.BytesIO(pyproject))
         self.assertEqual(build_tool_lock._project_requirements(stream.getvalue(), "demo-1.0.tar.gz"), ["wheel"])
 
+    def test_known_backend_extra_requirements_are_locked_before_build(self):
+        for backend, target, added in (
+            ("scikit_build_core.build", "3.14 musl-aarch64", ["cmake>=3.15", "ninja>=1.10"]),
+            ("mesonpy", "3.15 linux-x86_64", ["ninja>=1.8", "patchelf>=0.11"]),
+            ("mesonpy", "3.15 win-amd64", ["ninja>=1.8"]),
+            ("maturin", "3.14 musl-aarch64", []),
+            ("setuptools.build_meta", "3.14 musl-aarch64", []),
+        ):
+            with self.subTest(backend=backend, target=target):
+                data = f'[build-system]\nrequires = ["build-tool>=1"]\nbuild-backend = "{backend}"\n'
+                out = io.BytesIO()
+                with zipfile.ZipFile(out, "w") as archive:
+                    archive.writestr("demo-1.0/pyproject.toml", data)
+                self.assertEqual(
+                    build_tool_lock._project_requirements(out.getvalue(), "demo-1.0.zip", target),
+                    ["build-tool>=1", *added],
+                )
+                # Source inspection alone must never run an sdist backend.
+                self.assertEqual(
+                    build_tool_lock._project_requirements(out.getvalue(), "demo-1.0.zip"),
+                    ["build-tool>=1"],
+                )
+
     def test_refuse_ambiguous_and_unsafe_metadata(self):
         for requirements in ('["--extra-index-url https://evil.example/simple"]',
                              '["somepackage @ https://evil.example/file.whl"]',
@@ -71,6 +94,51 @@ class ReadSdist(unittest.TestCase):
 
 
 class Coordinator(unittest.TestCase):
+    def test_windows_compiler_selection_initialises_and_checks_toolset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for release in ("2022", "18"):
+                install = root / "Microsoft Visual Studio" / release / "Community"
+                bin_dir = install / "VC" / "Tools" / "MSVC" / "14.44.0" / "bin" / "Hostx64" / "x64"
+                bin_dir.mkdir(parents=True)
+                for tool in ("cl.exe", "link.exe"):
+                    (bin_dir / tool).touch()
+                vcvars = install / "VC" / "Auxiliary" / "Build" / "vcvarsall.bat"
+                vcvars.parent.mkdir(parents=True)
+                vcvars.write_text("@echo off\n")
+            chosen = root / "Microsoft Visual Studio" / "18" / "Community"
+            tools_dir = chosen / "VC" / "Tools" / "MSVC" / "14.44.0"
+            compiler = tools_dir / "bin" / "Hostx64" / "x64" / "cl.exe"
+            linker = compiler.with_name("link.exe")
+            env_text = (
+                f"VCINSTALLDIR={chosen / 'VC'}\n"
+                f"VCToolsInstallDir={tools_dir}\nPATH={compiler.parent}\n"
+            )
+            def fake_which(cmd):
+                return str(compiler if cmd == "cl.exe" else linker)
+            with mock.patch.dict(gap_wheels.os.environ, {"ProgramFiles": str(root), "ProgramFiles(x86)": "",
+                                                      "VSINSTALLDIR": ""}), \
+                 mock.patch.object(gap_wheels.platform, "machine", return_value="AMD64"), \
+                 mock.patch.object(gap_wheels.subprocess, "run",
+                                   return_value=subprocess.CompletedProcess([], 0, env_text, "")) as run, \
+                 mock.patch.object(gap_wheels.shutil, "which", side_effect=fake_which), \
+                 mock.patch.object(gap_wheels, "_tool_version", side_effect=["cl 19.0", "link 14.0"]):
+                self.assertEqual(gap_wheels._msvc_tools("3.15 win-amd64"), ("cl 19.0", "link 14.0"))
+                self.assertEqual(gap_wheels.os.environ["DISTUTILS_USE_SDK"], "1")
+                self.assertEqual(gap_wheels.os.environ["MSSdk"], "1")
+                self.assertEqual(gap_wheels.os.environ["CC"], str(compiler))
+                self.assertEqual(gap_wheels.os.environ["CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"], str(linker))
+                self.assertIn("cmd.exe", run.call_args.args[0])
+                self.assertIn(str(compiler.parent), gap_wheels.os.environ["PATH"])
+            # If vcvarsall silently chose another MSVC directory, reject it.
+            mismatch = env_text.replace(str(tools_dir), str(tools_dir) + "-other")
+            with mock.patch.dict(gap_wheels.os.environ, {"ProgramFiles": str(root), "ProgramFiles(x86)": "",
+                                                      "VSINSTALLDIR": ""}), \
+                 mock.patch.object(gap_wheels.platform, "machine", return_value="AMD64"), \
+                 mock.patch.object(gap_wheels.subprocess, "run",
+                                   return_value=subprocess.CompletedProcess([], 0, mismatch, "")):
+                self.assertEqual(gap_wheels._msvc_tools("3.15 win-amd64"), ("", ""))
+
     def test_repair_pins_cannot_drift_from_the_coordinator_lock(self):
         self.assertEqual(build_tool_lock.LINUX_REPAIR_TOOLS, gap_wheels.REPAIR_TOOLS)
         win = gap_wheels.expected_repair_tools("3.14 win-arm64")
