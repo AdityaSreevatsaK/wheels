@@ -157,10 +157,11 @@ def validate(lock: object) -> bool:
         return False
     if not (isinstance(lock["name"], str) and NAME.fullmatch(lock["name"])
             and isinstance(lock["version"], str) and build_lab.VERSION.fullmatch(lock["version"])
-            and lock["target"] in build_lab.TARGETS and isinstance(lock["sdist"], str)
-            and SDIST.fullmatch(lock["sdist"]) and isinstance(lock["sdist_url"], str)
-            and lock["sdist_url"].startswith(FILES) and isinstance(lock["sdist_sha256"], str)
-            and SHA.fullmatch(lock["sdist_sha256"])):
+            and isinstance(lock["target"], str) and lock["target"] in build_lab.TARGETS
+            and isinstance(lock["sdist"], str) and SDIST.fullmatch(lock["sdist"])
+            and isinstance(lock["sdist_url"], str) and lock["sdist_url"].startswith(FILES)
+            and urllib.parse.urlsplit(lock["sdist_url"]).path.rsplit("/", 1)[-1] == lock["sdist"]
+            and isinstance(lock["sdist_sha256"], str) and SHA.fullmatch(lock["sdist_sha256"])):
         return False
     if not isinstance(lock["wheels"], list) or not 0 < len(lock["wheels"]) <= 100:
         return False
@@ -305,6 +306,6 @@ def create_build_environment(lock: dict, work: Path) -> tuple[Path, list[dict]]:
         raise LockError("build pip must be present at the pinned version")
     if any(got.get(w["name"]) != w["version"].lower() for w in lock["wheels"]):
         raise LockError("installed build requirements differ from the coordinator lock")
-    if any(n not in {w["name"] for w in lock["wheels"]} | {"setuptools"} for n in got):
+    if any(n not in {w["name"] for w in lock["wheels"]} for n in got):
         raise LockError("unexpected build environment package")
     return py, lock["wheels"]
