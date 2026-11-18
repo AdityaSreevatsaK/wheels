@@ -88,6 +88,40 @@ class Index(unittest.TestCase):
         project = (site / "simple/tiktoken/index.html").read_text()
         self.assertIn('data-requires-python="&quot;&gt;&lt;x"', project)
 
+    def test_published_wheel_has_install_command_and_hash(self):
+        page = (self.build([wheel()]) / "index.html").read_text()
+        self.assertIn('<th>Install</th>', page)
+        self.assertIn(
+            '<code>pip install --extra-index-url '
+            'https://wheelgap.github.io/wheels/simple/ tiktoken==0.14.0</code>',
+            page,
+        )
+        self.assertIn(f'<small title="{SHA}">{SHA[:12]}</small>', page)
+        self.assertIn('<div class="matrix-scroll"><table class="matrix">', page)
+        self.assertNotIn("<script", page)
+
+    def test_withdrawn_wheel_has_no_install_command(self):
+        filename = "tiktoken-0.14.0-cp314-cp314-win_arm64.whl"
+        page = (self.build([wheel()], {"tiktoken": [pypi_file(filename)]}) / "index.html").read_text()
+        row = page.split('<tr id="tiktoken">', 1)[1].split("</tr>", 1)[0]
+        self.assertIn("withdrawn: PyPI has its own now", row)
+        self.assertIn("<td></td>", row)
+        self.assertNotIn("pip install", row)
+
+    def test_install_command_ignores_untrusted_version_field(self):
+        page = (self.build([wheel(version="1.0; rm -rf ~")]) / "index.html").read_text()
+        row = page.split('<tr id="tiktoken">', 1)[1].split("</tr>", 1)[0]
+        self.assertIn("tiktoken==0.14.0</code>", row)
+        self.assertNotIn("1.0; rm -rf ~", row.split("<code>", 1)[1].split("</code>", 1)[0])
+        self.assertNotIn("<script", page)
+
+    def test_install_command_requires_matching_filename_project(self):
+        mismatched = wheel(name="tiktoken", file="another-0.14.0-cp314-cp314-win_arm64.whl")
+        page = build_gap_index.human_page(build_gap_index.projects([mismatched]))
+        row = page.split('<tr id="tiktoken">', 1)[1].split("</tr>", 1)[0]
+        self.assertNotIn("pip install", row)
+
+
     def test_no_file_yet(self):
         tmp = Path(tempfile.mkdtemp())
         self.assertEqual(build_gap_index.build(tmp / "missing.json", tmp / "site", fetch=no_network), 0)
