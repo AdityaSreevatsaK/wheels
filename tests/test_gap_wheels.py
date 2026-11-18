@@ -48,17 +48,27 @@ def example_lock(job):
     return {"schema": 1, "name": project, "version": version, "target": target,
             "sdist": sdist, "sdist_url": f"https://files.pythonhosted.org/packages/x/{sdist}",
             "sdist_sha256": "a" * 64,
-            "wheels": [{"name": "setuptools", "version": "80.0.0", "filename": wheel_name,
-                        "url": f"https://files.pythonhosted.org/packages/x/{wheel_name}", "sha256": "e" * 64}]}
+            "wheels": [{"name": "pip", "version": "26.3", "filename": "pip-26.3-py3-none-any.whl",
+                        "url": "https://files.pythonhosted.org/packages/x/pip-26.3-py3-none-any.whl",
+                        "sha256": "f" * 64},
+                       {"name": "setuptools", "version": "80.0.0", "filename": wheel_name,
+                        "url": f"https://files.pythonhosted.org/packages/x/{wheel_name}", "sha256": "e" * 64}],
+            "repair_wheels": [
+                {"name": n, "version": v, "filename": f"{n}-{v}-py3-none-any.whl",
+                 "url": f"https://files.pythonhosted.org/packages/x/{n}-{v}-py3-none-any.whl",
+                 "sha256": "d" * 64}
+                for n, v in [("pip", "26.3"), ("auditwheel", "6.8.2"), ("patchelf", "0.19.1.0")]
+            ] if ("linux-" in target or "musl-" in target) else []}
 
 
 def example_tools(job):
     lock = example_lock(job)
     return {"lock_sha256": build_tool_lock.digest(lock),
             "packages": gap_wheels.expected_packages(lock),
+            "repair_packages": gap_wheels.expected_packages({"wheels": lock["repair_wheels"]}),
             "repair_tools": gap_wheels.expected_repair_tools(job["target"]), "python": "3.14.10",
             "python_build": "3.14.10 (test)", "runner_image": "mock-runner-version",
-            "compiler": {"cc": "cl 19.0", "link": "link 14.0"}}
+            "compiler": {"cc": "cl 19.0", "link": "link 14.0", "rustc": "", "cmake": ""}}
 
 
 def attach_locks(jobs, path=None):
@@ -430,19 +440,25 @@ class Dispatch(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.plan = Path(self.tmp.name) / "plan.json"
         self.plan.write_text(json.dumps(self.jobs))
+        self.locks = Path(self.tmp.name) / "locks.json"
         self.calls = []
         sleep = mock.patch.object(gap_wheels.time, "sleep", lambda s: None)
         sleep.start()
         self.addCleanup(sleep.stop)
 
     def run_dispatch(self, tips, runs=list):
+        planned = json.loads(self.plan.read_text(encoding="utf-8"))
+        self.locks.write_text(json.dumps({"schema": 1, "pairs": {
+            str(j["id"]): example_lock(j) for j in planned
+        }}), encoding="utf-8")
+
         def gh(args):
             self.calls.append(args)
             return (next(tips) + "\n").encode() if args[0] == "api" else b""
 
         with mock.patch.object(gap_wheels, "gh", gh), mock.patch.object(gap_wheels, "list_runs", lambda r, s: runs()):
             gap_wheels.main(["dispatch", "--plan", str(self.plan), "--batch", "99-1", "--repo", "o/r", "--sha", SHA,
-                             "--since", "2026-11-16T02:00:00Z", "--parallel", "2"])  # fmt: skip
+                             "--since", "2026-11-16T02:00:00Z", "--locks", str(self.locks), "--parallel", "2"])  # fmt: skip
 
     def started(self):
         return [c for c in self.calls if c[:2] == ["workflow", "run"]]
@@ -491,7 +507,7 @@ class Dispatch(unittest.TestCase):
 
         with mock.patch.object(gap_wheels, "gh", gh), mock.patch.object(gap_wheels, "list_runs", runs):
             gap_wheels.main(["dispatch", "--plan", str(self.plan), "--batch", "99-1", "--repo", "o/r", "--sha", SHA,
-                             "--since", "2026-11-16T02:00:00Z", "--parallel", "10"])  # fmt: skip
+                             "--since", "2026-11-16T02:00:00Z", "--locks", str(self.locks), "--parallel", "10"])  # fmt: skip
         self.assertEqual(len(made), 4)  # one POST per build, none repeated
 
     def test_retry(self):
@@ -624,7 +640,7 @@ class Stage(unittest.TestCase):
                  mock.patch.object(gap_wheels, "fetch_wheel", side_effect=lambda repo, rid: next(archives)):  # fmt: skip
                 gap_wheels.cmd_stage(args)
             lines = dict(line.split("=", 1) for line in out.read_text().splitlines())
-            staged = json.loads(lines["staged"])
+            staged = json.loads((tmp / "staged" / "staged.json").read_text())
             self.assertEqual([(w["wheel"], w["licence"]) for w in staged], [(WIN, "MIT")])
             self.assertIn("neither PyPI nor its METADATA names an OSI-approved licence", (tmp / "summary.md").read_text())
 
@@ -759,11 +775,11 @@ class Stage(unittest.TestCase):
             fetch.assert_called_once_with("wheelgap/tracker", 11)  # build 1's run
             self.assertEqual((tmp / "staged" / WIN).read_bytes(), data)
             lines = dict(line.split("=", 1) for line in out.read_text().splitlines())
-            staged = json.loads(lines["staged"])
+            staged = json.loads((tmp / "staged" / "staged.json").read_text())
             self.assertEqual([w["wheel"] for w in staged], [WIN])
             self.assertEqual(staged[0]["licence"], "MIT")
             self.assertEqual(staged[0]["requires_python"], ">=3.9")
-            self.assertEqual(gap_wheels.trusted_staged(lines["staged"]), staged)
+            self.assertEqual(gap_wheels.trusted_staged((tmp / "staged" / "staged.json").read_text()), staged)
             self.assertEqual(json.loads(lines["tests"]), [{"target": "3.14 win-arm64", "runner": "windows-11-arm",
                                                            "python": "3.14", "slug": "3.14-win-arm64", "image": "",
                                                            "interpreter": "", "python_url": "",
@@ -795,7 +811,7 @@ class Stage(unittest.TestCase):
                  mock.patch.object(gap_wheels, "fetch_wheel", side_effect=lambda repo, rid: next(calls)):  # fmt: skip
                 gap_wheels.cmd_stage(args)
             lines = dict(line.split("=", 1) for line in out.read_text().splitlines())
-            self.assertEqual([w["wheel"] for w in json.loads(lines["staged"])], [GLIBC_T, MUSL])
+            self.assertEqual([w["wheel"] for w in json.loads((tmp / "staged" / "staged.json").read_text())], [GLIBC_T, MUSL])
             self.assertIn("needs libraries or symbol versions a manylinux_2_28_x86_64 system may not have: GLIBC_2.34",
                           (tmp / "summary.md").read_text())  # fmt: skip
             tests = {t["target"]: t for t in json.loads(lines["tests"])}
