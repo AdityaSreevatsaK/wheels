@@ -130,6 +130,12 @@ class Coordinator(unittest.TestCase):
         self.assertEqual(set(bundle["pairs"]), {"0"})
         self.assertEqual(selected[0]["lock_sha256"], build_tool_lock.digest(bundle["pairs"]["0"]))
 
+    def test_lock_validator_rejects_malformed_target_and_sdist_url(self):
+        lock = project_lock()
+        self.assertTrue(build_tool_lock.validate(lock))
+        self.assertFalse(build_tool_lock.validate({**lock, "target": ["3.14 win-arm64"]}))
+        self.assertFalse(build_tool_lock.validate({**lock, "sdist_url": FILE_URL + "else.zip"}))
+
     def test_missing_or_tampered_lock_is_refused(self):
         job = {"name": "demo", "version": "1.0", "target": TARGET}
         lock = project_lock()
@@ -213,6 +219,15 @@ class TrustedPublication(unittest.TestCase):
         verified, rows = self.verify(first, second)
         self.assertFalse(verified)
         self.assertIn("different toolchains", rows[0]["verdict"])
+
+    def test_changed_python_patch_or_runner_image_is_rejected(self):
+        for key, changed in (("python", "3.14.11"), ("runner_image", "20261119.1")):
+            with self.subTest(key=key):
+                first, second = self.result(), self.result(2)
+                second["tools"][key] = changed
+                verified, rows = self.verify(first, second)
+                self.assertEqual(verified, [])
+                self.assertIn("different toolchains", rows[0]["verdict"])
 
     def test_forged_lock_or_packages_cannot_be_verified(self):
         first, second = self.result(), self.result(2)
