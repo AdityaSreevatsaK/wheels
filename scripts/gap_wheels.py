@@ -740,6 +740,10 @@ def verify(
             or build_tool_lock.digest(locks["pairs"][pid]) != job.get("lock_sha256")
             or first["tools"]["packages"] != expected_packages(locks["pairs"][pid])
             or second["tools"]["packages"] != expected_packages(locks["pairs"][pid])
+            or first["sdist"] != locks["pairs"][pid]["sdist"]
+            or second["sdist"] != locks["pairs"][pid]["sdist"]
+            or first["sdist_sha256"] != locks["pairs"][pid]["sdist_sha256"]
+            or second["sdist_sha256"] != locks["pairs"][pid]["sdist_sha256"]
         ):
             verdict = "the coordinator's build-tool lock does not match the builds"
         elif first["tools"] != second["tools"]:
