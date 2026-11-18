@@ -27,9 +27,16 @@ on:
         required: true
       image:
         default: ""
+      coordinator_run:
+        required: true
+      pair_id:
+        required: true
+      lock_sha256:
+        required: true
 
 permissions:
   contents: read
+  actions: read # download the coordinator's pinned lock; untrusted code cannot modify it
 
 jobs:
   build:
@@ -43,6 +50,14 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ inputs.python }}
+      - name: Download the coordinator's build-tool locks
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: build-tool-locks
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.coordinator_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/locks
       - name: Build from the sdist, hash, and (build 1) install
         shell: bash
         env:
@@ -51,7 +66,9 @@ jobs:
           TARGET: ${{ inputs.target }}
           ATTEMPT: ${{ inputs.attempt }}
           RUNNER: ${{ inputs.runner }}
-        run: python scripts/gap_wheels.py build --name "$NAME" --version "$VERSION" --target "$TARGET" --attempt "$ATTEMPT" --runner "$RUNNER" --out result.json --wheel-dir "$RUNNER_TEMP/wheel"
+          PAIR_ID: ${{ inputs.pair_id }}
+          LOCK_SHA256: ${{ inputs.lock_sha256 }}
+        run: python scripts/gap_wheels.py build --name "$NAME" --version "$VERSION" --target "$TARGET" --attempt "$ATTEMPT" --runner "$RUNNER" --out result.json --wheel-dir "$RUNNER_TEMP/wheel" --lock-bundle "$RUNNER_TEMP/locks/build-tool-locks.json" --lock-sha256 "$LOCK_SHA256" --pair-id "$PAIR_ID"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -80,6 +97,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Download the coordinator's build-tool locks
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: build-tool-locks
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.coordinator_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/locks
       - name: Build from the sdist in the target's image, hash, and (build 1) install
         env:
           IMAGE: ${{ inputs.image }}
@@ -89,11 +114,13 @@ jobs:
           ATTEMPT: ${{ inputs.attempt }}
           RUNNER: ${{ inputs.runner }}
           INTERPRETER: ${{ inputs.python }}
+          PAIR_ID: ${{ inputs.pair_id }}
+          LOCK_SHA256: ${{ inputs.lock_sha256 }}
         run: |
           # The checkout is mounted read-only; the result goes to its own folder.
           mkdir -p "$RUNNER_TEMP/out"
-          docker run --rm -v "$PWD:/lab:ro" -v "$RUNNER_TEMP/out:/out" -w /lab \
-            -e NAME -e VERSION -e TARGET -e ATTEMPT -e RUNNER -e INTERPRETER "$IMAGE" sh scripts/container_build.sh
+          docker run --rm -v "$PWD:/lab:ro" -v "$RUNNER_TEMP/out:/out" -v "$RUNNER_TEMP/locks:/locks:ro" -w /lab \
+            -e NAME -e VERSION -e TARGET -e ATTEMPT -e RUNNER -e INTERPRETER -e PAIR_ID -e LOCK_SHA256 "$IMAGE" sh scripts/container_build.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
