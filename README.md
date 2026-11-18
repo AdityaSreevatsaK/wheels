@@ -110,7 +110,7 @@ gh attestation verify $wheel -R wheelgap/wheels
 **Linux (shell):**
 
 ```sh
-wheel="fastuuid-0.14.0-cp314-cp314-win_arm64.whl"  # replace with a Linux wheel
+wheel="lz4-4.4.5-cp314-cp314t-manylinux_2_28_x86_64.whl"
 curl -fL "https://github.com/wheelgap/wheels/releases/download/gap-wheels/$wheel" -o "$wheel"
 expected="$(curl -fsSL https://raw.githubusercontent.com/wheelgap/wheels/main/data/gap-wheels.json \
   | jq -r --arg wheel "$wheel" '[.wheels[] | select(.wheel == $wheel) | .sha256] | if length == 1 then .[0] else empty end')"
