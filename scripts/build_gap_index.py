@@ -333,18 +333,33 @@ def human_page(
             builds = [u for u in w.get("builds") or [] if isinstance(u, str) and u.startswith("https://github.com/")]
             links = ", ".join(f'<a href="{e(u)}">build {n}</a>' for n, u in enumerate(builds, 1))
             anchor = f' id="{e(project)}"' if n == 0 else ""
+            parsed = wheel_tags(w["wheel"])
+            filename_version = (
+                parsed[1]
+                if parsed is not None
+                and parsed[0] == project
+                and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.]*", parsed[1], re.ASCII)
+                else None
+            )
+            install = (
+                f"<code>pip install --extra-index-url {e(INDEX_URL)} {e(project)}=={e(filename_version)}</code>"
+                if w["wheel"] not in gone and filename_version is not None
+                else ""
+            )
             rows.append(
                 f'          <tr{anchor}><td><a href="{e(TRACKER)}p/{e(project)}/">{e(w["name"])}</a>{note}</td>'
                 f"<td>{e(str(w.get('version', '')))}</td><td>{e(str(w.get('target', '')))}</td>"
                 f"<td>{e(str(w.get('verified') or ''))}</td><td>{links}</td>"
-                f'<td><a href="{e(RELEASE_URL + w["wheel"])}">wheel</a></td>'
+                f'<td><a href="{e(RELEASE_URL + w["wheel"])}">wheel</a>'
+                f'<br><small title="{e(w["sha256"])}">{e(w["sha256"][:12])}</small></td>'
+                f"<td>{install}</td>"
                 f"<td>{e(gone.get(w['wheel'], 'in the index'))}</td></tr>"
             )
     count = sum(len(v) for v in by_project.values()) - len(gone)
     table = (
         '        <div class="matrix-scroll"><table class="matrix">\n'
         "          <thead><tr><th>Package</th><th>Version</th><th>Target</th><th>Verified</th><th>Builds</th>"
-        "<th>File</th><th>Status</th></tr></thead>\n"
+        "<th>File</th><th>Install</th><th>Status</th></tr></thead>\n"
         "          <tbody>\n" + "\n".join(rows) + "\n          </tbody>\n"
         "        </table></div>\n"
         if rows
