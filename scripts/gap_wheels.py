@@ -510,8 +510,8 @@ def run_build(
     try:
         p = subprocess.run([str(py), "-m", "pip", "wheel", "--no-build-isolation", "--no-index", "--no-deps",
                             "--no-cache-dir", "-w", str(out), str(src)], check=False,
-                           env=build_env(), capture_output=True, text=True, errors="replace",
-                           timeout=BUILD_TIMEOUT)  # fmt: skip
+                           env=dict(build_env(), PIP_NO_INDEX="1"), capture_output=True,
+                           text=True, errors="replace", timeout=BUILD_TIMEOUT)  # fmt: skip
         print((p.stdout + p.stderr)[-6000:])
     except subprocess.TimeoutExpired:
         print("gap_wheels: the build timed out", file=sys.stderr)
