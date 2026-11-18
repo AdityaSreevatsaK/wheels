@@ -1833,6 +1833,11 @@ def cmd_stage(args: argparse.Namespace) -> int:
     optout = opted_out(Path(args.optout))
     staged, lines = [], []
     for wheel in manifest["wheels"]:
+        if not tool_provenance_valid(wheel.get("tools")):
+            lines.append(
+                f"| {wheel['name']} | {wheel['version']} | {wheel['target']} | no verified toolchain |"
+            )
+            continue
         info = pypi_info(wheel["name"], wheel["version"])
         reason = stage_reason(wheel, info, optout)
         data = None
@@ -1848,15 +1853,13 @@ def cmd_stage(args: argparse.Namespace) -> int:
         if reason is not None:
             continue
         (out / wheel["wheel"]).write_bytes(data)
-        if not tool_provenance_valid(wheel.get("tools")):
-            lines[-1] = f"| {wheel['name']} | {wheel['version']} | {wheel['target']} | no verified toolchain |"
-            (out / wheel["wheel"]).unlink(missing_ok=True)
-            continue
         staged.append({**{k: wheel[k] for k in ("name", "version", "target", "wheel", "sha256", "sdist",
                                                 "sdist_sha256", "builds", "tools")},
                        "licence": stated, "requires_python": info.get("requires_python") or None,
                        "verified": manifest.get("date"), "batch": manifest.get("run")})  # fmt: skip
-    (out / "staged.json").write_text(json.dumps(staged, indent=1) + "\n", encoding="utf-8")
+    staged_file = out / "staged.json"
+    staged_file.write_text(json.dumps(staged, indent=1) + "\n", encoding="utf-8")
+    staged_sha256 = sha256(staged_file)
     matrix = [install_test_job(t) for t in sorted({w["target"] for w in staged})]
     text = "\n".join([f"**{len(staged)} staged** of {len(manifest['wheels'])} verified", "",
                       "| package | version | target | |", "|---|---|---|---|", *lines]) + "\n"  # fmt: skip
@@ -1866,8 +1869,10 @@ def cmd_stage(args: argparse.Namespace) -> int:
             f.write(text)
     if args.github_output:
         with open(args.github_output, "a", encoding="utf-8") as f:
-            # The publish job trusts only this output for what to publish; the artifact is just the bytes.
-            f.write(f"staged={json.dumps(staged, separators=(',', ':'))}\n")
+            # Only a digest and count cross the job-output boundary. The full
+            # provenance stays in staged.json and is checked against this digest.
+            f.write(f"staged_sha256={staged_sha256}\n")
+            f.write(f"staged_count={len(staged)}\n")
             f.write(f"tests={json.dumps(matrix, separators=(',', ':'))}\n")
     return 0
 
@@ -2039,6 +2044,9 @@ def select(staged: list[dict], tested: dict[str, dict[str, bool]], folder: Path,
     return new, lines
 
 
+MAX_STAGED_BYTES = 10_000_000
+
+
 def trusted_staged(text: str) -> list[dict]:
     """The staging job's `staged` output, checked for shape (it's ours, but a bad one must stop, not half-publish)."""
     staged = json.loads(text)
@@ -2057,7 +2065,17 @@ def trusted_staged(text: str) -> list[dict]:
 def cmd_publish(args: argparse.Namespace) -> int:
     """Copy the wheels to publish into RELEASE_DIR and add them to the index file; list in RELEASE_DIR/withdraw.txt
     the published wheels of projects that have since opted out (removed from the index here)."""
-    staged = trusted_staged(args.staged_json)
+    if args.staged_file:
+        path = Path(args.staged_file)
+        if (not args.staged_sha256 or not SHA256.fullmatch(args.staged_sha256)
+                or not path.is_file() or path.is_symlink()
+                or path.stat().st_size > MAX_STAGED_BYTES
+                or sha256(path) != args.staged_sha256):
+            raise SystemExit("gap_wheels: staged file is missing, modified or not digest-verified")
+        staged_text = path.read_text(encoding="utf-8")
+    else:
+        staged_text = args.staged_json
+    staged = trusted_staged(staged_text)
     staged_dir = Path(args.files)
     index_path = Path(args.index)
     index = json.loads(index_path.read_text(encoding="utf-8")) if index_path.is_file() else {"schema": INDEX_SCHEMA, "wheels": []}
@@ -2132,8 +2150,12 @@ def main(argv: list[str] | None = None) -> int:
         t.add_argument(flag, required=True)
     t.set_defaults(func=cmd_install_test)
     pb = sub.add_parser("publish")
-    for flag in ("--staged-json", "--files", "--tested", "--index", "--release-dir"):
+    for flag in ("--files", "--tested", "--index", "--release-dir"):
         pb.add_argument(flag, required=True)
+    stage_input = pb.add_mutually_exclusive_group(required=True)
+    stage_input.add_argument("--staged-json")
+    stage_input.add_argument("--staged-file")
+    pb.add_argument("--staged-sha256", help="SHA-256 of the trusted stage job's staged.json output")
     pb.add_argument("--optout", default="data/gap-wheels-optout.txt")
     pb.add_argument("--run", default="")
     pb.add_argument("--summary")
