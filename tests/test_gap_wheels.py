@@ -251,7 +251,7 @@ class Merge(unittest.TestCase):
     def test_an_oversized_result_is_not_parsed(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "result.json"
-            path.write_text(" " * 20_000 + "{}")
+            path.write_text(" " * (gap_wheels.MAX_RESULT_BYTES + 1) + "{}")
             self.assertEqual(gap_wheels.read_result(path), "too big")
 
 
@@ -338,7 +338,7 @@ class Runs(unittest.TestCase):
         for archive, expected in ((zipped({"result.json": "{}"}), (b"{}", None)), (zipped({"other.json": "{}"}), None),
                                   (zipped({"result.json": "{}", "members.json": "[]"}), (b"{}", b"[]")),
                                   (zipped({"result.json": "{}", "members.json": "x" * 2_000_001}), (b"{}", None)),
-                                  (zipped({"result.json": "x" * 20_000}), None), (b"not a zip", None)):  # fmt: skip
+                                  (zipped({"result.json": "x" * (gap_wheels.MAX_RESULT_BYTES + 1)}), None), (b"not a zip", None)):  # fmt: skip
             with self.subTest(expected), mock.patch.object(gap_wheels, "gh", side_effect=[listing, archive]):
                 self.assertEqual(gap_wheels.fetch_result("o/r", {"id": 7}), expected)
         two = json.dumps({"artifacts": [{"id": 5, "name": "result"}, {"id": 6, "name": "result"}]}).encode()
