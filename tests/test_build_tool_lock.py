@@ -35,13 +35,15 @@ def project_lock(name="demo", target=TARGET):
             "wheels": [{"name": "pip", "version": "26.3", "filename": pip_file,
                         "url": FILE_URL + pip_file, "sha256": "f" * 64},
                        {"name": "setuptools", "version": "80.0.0", "filename": wheel_name,
-                        "url": FILE_URL + wheel_name, "sha256": "e" * 64}]}
+                        "url": FILE_URL + wheel_name, "sha256": "e" * 64}],
+            "repair_wheels": []}
 
 
 def provenance(lock):
     return {"lock_sha256": build_tool_lock.digest(lock), "packages": gap_wheels.expected_packages(lock),
+            "repair_packages": gap_wheels.expected_packages({"wheels": lock["repair_wheels"]}),
             "repair_tools": gap_wheels.expected_repair_tools(lock["target"]), "python": "3.14.10", "python_build": "3.14.10 test", "runner_image": "20261118.1",
-            "compiler": {"cc": "MSVC compiler 19.0", "link": "MSVC linker 14.0"}}
+            "compiler": {"cc": "MSVC compiler 19.0", "link": "MSVC linker 14.0", "rustc": "", "cmake": ""}}
 
 
 class ReadSdist(unittest.TestCase):
@@ -96,10 +98,19 @@ class Coordinator(unittest.TestCase):
 
         def command(args, **kw):
             seen.append(args)
-            (Path(args[-1]) / filename).parent.mkdir(parents=True, exist_ok=True)
-            (Path(args[-1]) / filename).write_bytes(wheel)
-            (Path(args[-1]) / pip_filename).write_bytes(wheel)
-            return subprocess.CompletedProcess(args, 0, "", "")
+            if args[:2] == ["uv", "--version"]:
+                return subprocess.CompletedProcess(args, 0, f"uv {build_tool_lock.UV_VERSION}\n", "")
+            if args[:3] == ["uv", "pip", "compile"]:
+                path = Path(args[args.index("--output-file") + 1])
+                path.write_text("pip==26.3\nsetuptools==80.0.0\n", encoding="utf-8")
+                return subprocess.CompletedProcess(args, 0, "", "")
+            if "download" in args:
+                directory = Path(args[args.index("-d") + 1])
+                directory.mkdir(parents=True, exist_ok=True)
+                (directory / filename).write_bytes(wheel)
+                (directory / pip_filename).write_bytes(wheel)
+                return subprocess.CompletedProcess(args, 0, "", "")
+            raise AssertionError(f"unexpected command: {args}")
 
         with mock.patch.object(build_tool_lock, "_metadata", side_effect=metadata), \
              mock.patch.object(build_tool_lock, "_from_pypi", return_value=source), \
@@ -108,10 +119,12 @@ class Coordinator(unittest.TestCase):
         self.assertTrue(build_tool_lock.validate(lock))
         self.assertEqual(lock["sdist_sha256"], hashlib.sha256(source).hexdigest())
         self.assertEqual({w["sha256"] for w in lock["wheels"]}, {hashlib.sha256(wheel).hexdigest()})
-        self.assertIn("--only-binary=:all:", seen[0])
-        self.assertIn("--platform", seen[0])
-        self.assertIn("win_arm64", seen[0])
-        self.assertNotIn("--no-binary", seen[0])
+        self.assertIn("--python-platform", seen[1])
+        self.assertIn("aarch64-pc-windows-msvc", seen[1])
+        self.assertIn("--only-binary=:all:", seen[-1])
+        self.assertIn("--platform", seen[-1])
+        self.assertIn("win_arm64", seen[-1])
+        self.assertIn("--no-deps", seen[-1])
 
     def test_resolve_rejects_sdist_hash_before_dependency_resolution(self):
         item = {"filename": "demo-1.0.zip", "packagetype": "sdist",
