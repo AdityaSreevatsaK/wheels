@@ -414,7 +414,8 @@ def _tool_version(cmd: list[str]) -> str:
     """Record the version text of the compiler actually available on this runner."""
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=20)
-        return " ".join((result.stdout + "\n" + result.stderr).split())[:450]
+        command = str(Path(cmd[0]).resolve()) if Path(cmd[0]).is_file() else (shutil.which(cmd[0]) or cmd[0])
+        return (command + ": " + " ".join((result.stdout + "\n" + result.stderr).split()))[:450]
     except (OSError, subprocess.SubprocessError):
         return ""
 
@@ -442,6 +443,14 @@ def _msvc_tools(target: str) -> tuple[str, str]:
     linker = compiler.with_name("link.exe")
     if not linker.is_file():
         return "", ""
+    # Force the selected executable pair to the front of the build's PATH.
+    # Without this, provenance might describe one compiler while setuptools
+    # executes a different cl.exe found by the build subprocess.
+    os.environ["PATH"] = f"{compiler.parent}{os.pathsep}{os.environ.get('PATH', '')}"
+    if Path(shutil.which("cl.exe") or "").resolve() != compiler.resolve():
+        return "", ""
+    if Path(shutil.which("link.exe") or "").resolve() != linker.resolve():
+        return "", ""
     cc = _tool_version([str(compiler), "/Bv"])
     link = _tool_version([str(linker), "/?"])
     return cc, link
@@ -459,11 +468,13 @@ def build_tool_provenance(lock_sha256: str, packages: list[dict], target: str) -
     """Record tools before the sdist's build backend is executed."""
     image = build_lab.TARGETS[target].get("image") or os.environ.get("ImageVersion", "")
     if os.name == "nt":
-        # The runner image floats: record its exact version, not just the Windows runner label.
+        # The same selected compiler is inserted into the backend's PATH.
         cc, link = _msvc_tools(target)
     else:
         cc = _tool_version(["cc", "--version"])
         link = _tool_version(["ld", "--version"])
+    rustc = _tool_version(["rustc", "--version", "--verbose"])
+    cmake = _tool_version(["cmake", "--version"])
     return {
         "lock_sha256": lock_sha256,
         "packages": [{"name": w["name"], "version": w["version"], "sha256": w["sha256"],
@@ -473,7 +484,7 @@ def build_tool_provenance(lock_sha256: str, packages: list[dict], target: str) -
         "python": platform.python_version(),
         "python_build": sys.version,
         "runner_image": image,
-        "compiler": {"cc": cc, "link": link},
+        "compiler": {"cc": cc, "link": link, "rustc": rustc, "cmake": cmake},
     }
 
 
@@ -511,6 +522,9 @@ def run_build(
         build_tool_lock.download_locked({"url": lock["sdist_url"], "sha256": lock["sdist_sha256"]}, found[0])
         fields.update(sdist=found[0].name, sdist_sha256=sha256(found[0]))
         py, packages = build_tool_lock.create_build_environment(lock, work)
+        # Build backends may invoke a locked Python-supplied cmake/ninja executable.
+        # This PATH is also used by the compiler version probes and build process.
+        os.environ["PATH"] = f"{py.parent}{os.pathsep}{os.environ.get('PATH', '')}"
         tools = build_tool_provenance(lock_sha256, packages, lock["target"])
         if not tools["compiler"]["cc"] or not tools["compiler"]["link"] or not tools["runner_image"]:
             raise build_tool_lock.LockError("compiler or runner image version cannot be identified")
@@ -649,9 +663,11 @@ def tool_provenance_valid(value: object) -> bool:
             and isinstance(value["runner_image"], str) and 0 < len(value["runner_image"]) <= 500):
         return False
     compiler = value["compiler"]
-    if not isinstance(compiler, dict) or set(compiler) != {"cc", "link"}:
+    if not isinstance(compiler, dict) or set(compiler) != {"cc", "link", "rustc", "cmake"}:
         return False
-    if not all(isinstance(c, str) and 0 < len(c) <= 500 for c in compiler.values()):
+    if not all(isinstance(c, str) and len(c) <= 500 for c in compiler.values()):
+        return False
+    if not compiler["cc"] or not compiler["link"]:
         return False
     pkgs = value["packages"]
     repair_pkgs = value["repair_packages"]
