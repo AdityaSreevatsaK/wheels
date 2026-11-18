@@ -108,6 +108,15 @@ def _project_requirements(archive: bytes, filename: str) -> list[str]:
             raise LockError("build-system.requires must be a nonempty string list")
         if not isinstance(system.get("build-backend"), str) or not system["build-backend"]:
             raise LockError("no static PEP 517 build backend")
+        # These go into a pip requirements file: never allow an sdist to add index options,
+        # includes, URLs or lines that change the resolver's trust boundary.
+        if any(
+            "\\n" in req or "\\r" in req or req.lstrip().startswith(("-", "#"))
+            or any(part in req for part in ("@", "://", "\\\\", "--", "/"))
+            or re.fullmatch(r"\\s*[A-Za-z0-9][A-Za-z0-9._-]{0,120}.*", req) is None
+            for req in reqs
+        ):
+            raise LockError("unsupported or unsafe PEP 508 build requirement")
         return reqs
     except (UnicodeError, KeyError, tomllib.TOMLDecodeError, TypeError) as exc:
         raise LockError(f"unsupported pyproject.toml build requirements: {exc}") from exc
