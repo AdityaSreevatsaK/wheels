@@ -1,5 +1,6 @@
 import http.client
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -165,14 +166,55 @@ class Index(unittest.TestCase):
 
     def test_published_wheel_has_install_command_and_hash(self):
         page = (self.build([wheel()]) / "index.html").read_text()
-        self.assertIn('<th>Install</th>', page)
+        self.assertIn('<th scope="col">Install</th>', page)
         self.assertIn(
             '<code>pip install --extra-index-url '
             'https://wheelgap.github.io/wheels/simple/ tiktoken==0.14.0</code>',
             page,
         )
         self.assertIn(f'<small title="{SHA}">{SHA[:12]}</small>', page)
-        self.assertIn('<div class="matrix-scroll"><table class="matrix">', page)
+        self.assertIn('<div class="matrix-scroll" tabindex="0" role="region" aria-labelledby="published_wheels">', page)
+        self.assertNotIn("<script", page)
+
+    def test_published_table_has_unique_accessible_links_and_keyboard_scrolling(self):
+        wheels = [
+            wheel(builds=["https://github.com/wheelgap/tracker/actions/runs/1",
+                          "https://github.com/wheelgap/tracker/actions/runs/2"]),
+            wheel(name="lz4", file="lz4-4.4.5-cp314-cp314-win_arm64.whl", version="4.4.5",
+                  builds=["https://github.com/wheelgap/tracker/actions/runs/3",
+                          "https://github.com/wheelgap/tracker/actions/runs/4"]),
+        ]
+        page = (self.build(wheels) / "index.html").read_text(encoding="utf-8")
+        heading = '<h2 id="published_wheels">Published wheels</h2>'
+        self.assertIn(heading, page)
+        self.assertEqual(page.count('id="published_wheels"'), 1)
+        self.assertIn(
+            '<div class="matrix-scroll" tabindex="0" role="region" aria-labelledby="published_wheels">',
+            page,
+        )
+        thead = page.split("<thead>", 1)[1].split("</thead>", 1)[0]
+        headers = re.findall(r"<th\b[^>]*>", thead)
+        self.assertEqual(len(headers), 8)
+        self.assertTrue(all('scope="col"' in header for header in headers))
+
+        links = re.findall(r'<a href="[^"]+" aria-label="([^"]+)">(wheel|build [12])</a>', page)
+        self.assertEqual(len(links), 6)
+        self.assertEqual(len({label for label, _ in links}), len(links))
+        for label, visible_text in links:
+            self.assertTrue(label.startswith(visible_text + " "), label)
+        self.assertNotIn("<script", page)
+
+    def test_current_published_data_has_accessible_links_without_scripts(self):
+        path = Path(__file__).resolve().parents[1] / "data" / "gap-wheels.json"
+        published = json.loads(path.read_text(encoding="utf-8"))["wheels"]
+        page = build_gap_index.human_page(build_gap_index.projects(published))
+        for entry in published:
+            with self.subTest(wheel=entry["wheel"]):
+                self.assertIn(f'aria-label="wheel {entry["wheel"]}"', page)
+                for n in (1, 2):
+                    self.assertIn(f'aria-label="build {n} of {entry["wheel"]}"', page)
+        self.assertEqual(page.count('scope="col"'), 8)
+        self.assertIn('aria-labelledby="published_wheels"', page)
         self.assertNotIn("<script", page)
 
     def test_withdrawn_wheel_has_no_install_command(self):
