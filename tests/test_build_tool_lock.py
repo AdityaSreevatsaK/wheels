@@ -77,7 +77,9 @@ class Coordinator(unittest.TestCase):
         self.assertEqual({x["requirement"] for x in win},
                          {*gap_wheels.WINDOWS_REPAIR_TOOLS, *gap_wheels.RETAG_TOOLS})
         self.assertTrue(all(len(x["sha256"]) == 64 for x in win))
-        self.assertEqual(gap_wheels.expected_repair_tools("3.15 linux-x86_64"), [])
+        linux = gap_wheels.expected_repair_tools("3.15 linux-x86_64")
+        self.assertEqual({x["requirement"] for x in linux}, set(gap_wheels.RETAG_TOOLS))
+        self.assertTrue(all(len(x["sha256"]) == 64 for x in linux))
 
     def test_resolve_uses_wheels_only_and_checks_pypi_hash(self):
         source = project_zip()
@@ -286,6 +288,28 @@ class TrustedPublication(unittest.TestCase):
         verified, rows = self.verify(first, second)
         self.assertFalse(verified)
         self.assertIn("rejected", rows[0]["verdict"])
+
+    def test_provenance_rejects_controls_and_accepts_prerelease_python(self):
+        record = provenance(self.lock)
+        for field, text in (
+            ("python_build", "Python\n3.14"),
+            ("runner_image", "runner\x07image"),
+        ):
+            with self.subTest(field=field):
+                altered = copy.deepcopy(record)
+                altered[field] = text
+                self.assertFalse(gap_wheels.tool_provenance_valid(altered))
+        altered = copy.deepcopy(record)
+        altered["compiler"]["cc"] = "compiler\x1b[31m"
+        self.assertFalse(gap_wheels.tool_provenance_valid(altered))
+        altered = copy.deepcopy(record)
+        altered["compiler"]["cmake"] = "CMake ☃"
+        self.assertFalse(gap_wheels.tool_provenance_valid(altered))
+        for version in ("3.16.0a1", "3.16.0b2", "3.16.0rc1", "3.16.0.dev3"):
+            with self.subTest(version=version):
+                altered = copy.deepcopy(record)
+                altered["python"] = version
+                self.assertTrue(gap_wheels.tool_provenance_valid(altered))
 
     def test_publication_refuses_missing_or_malformed_provenance(self):
         self.assertFalse(gap_wheels.tool_provenance_valid(None))
