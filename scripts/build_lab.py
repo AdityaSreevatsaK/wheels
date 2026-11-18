@@ -30,6 +30,9 @@ Standard library only, so plan and merge never import third-party code.
 
 from __future__ import annotations
 
+# Wheel publishing repair tools are pinned once for the coordinator and builders.
+REPAIR_TOOLS = ("auditwheel==6.8.2", "patchelf==0.19.1.0")
+
 import argparse
 import datetime as dt
 import json
