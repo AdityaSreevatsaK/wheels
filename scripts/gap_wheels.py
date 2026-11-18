@@ -53,6 +53,7 @@ import io
 import json
 import os
 import posixpath
+import platform
 import re
 import shutil
 import subprocess
@@ -68,15 +69,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import build_lab  # TARGETS, interpreter_problem, the name and version rules
+import build_tool_lock
 
 SCHEMA = 1
 SDIST = re.compile(r"[A-Za-z0-9._-]{1,120}\.(?:tar\.gz|zip)", re.ASCII)
 WHEEL = re.compile(r"[A-Za-z0-9._+!-]{1,200}\.whl", re.ASCII)
 SHA256 = re.compile(r"[0-9a-f]{64}", re.ASCII)
 RESULT_KEYS = frozenset(
-    {"schema", "name", "version", "target", "attempt", "runner", "sdist", "sdist_sha256", "wheel", "sha256", "installs"}
+    {"schema", "name", "version", "target", "attempt", "runner", "sdist", "sdist_sha256", "wheel", "sha256", "installs", "tools"}
 )
-MAX_RESULT_BYTES = 10_000
+MAX_RESULT_BYTES = 80_000
 BUILD_TIMEOUT = build_lab.BUILD_TIMEOUT
 INSTALL_TIMEOUT = build_lab.INSTALL_TIMEOUT
 
@@ -141,6 +143,9 @@ def cmd_plan(args: argparse.Namespace) -> int:
     # counted without resetting (an ISO week number jumps back to 1 each January).
     start = dt.date.today().toordinal() // 7 * args.max if args.rotate else 0
     jobs = plan(builds, args.max, only, start)
+    if args.lock_out:
+        jobs, bundle = build_tool_lock.lock_plan(jobs)
+        Path(args.lock_out).write_text(json.dumps(bundle, sort_keys=True) + "\n", encoding="utf-8")
     hosted = [j for j in jobs if "image" not in j]
     docker = [j for j in jobs if "image" in j]
     print(f"{len(jobs) // 2} pairs, {len(jobs)} builds", file=sys.stderr)
@@ -396,6 +401,37 @@ def namespace_folders(wheel: Path) -> list[str]:
     return sorted(t for t in tops if f"{t}/__init__.py" not in names)
 
 
+
+def _tool_version(cmd: list[str]) -> str:
+    """Record the version text of the compiler actually available on this runner."""
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=20)
+        return " ".join((result.stdout + "\n" + result.stderr).split())[:450]
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def build_tool_provenance(lock_sha256: str, packages: list[dict], target: str) -> dict:
+    """Record tools before the sdist's build backend is executed."""
+    image = build_lab.TARGETS[target].get("image") or os.environ.get("ImageVersion", "")
+    if os.name == "nt":
+        # The runner image floats: record its exact version, not just the windows-2025 label.
+        cc = _tool_version(["cl.exe", "/Bv"])
+        link = _tool_version(["link.exe", "/?"])
+    else:
+        cc = _tool_version(["cc", "--version"])
+        link = _tool_version(["ld", "--version"])
+    return {
+        "lock_sha256": lock_sha256,
+        "packages": [{"name": w["name"], "version": w["version"], "sha256": w["sha256"],
+                      "filename": w["filename"]} for w in packages],
+        "python": platform.python_version(),
+        "python_build": sys.version,
+        "runner_image": image,
+        "compiler": {"cc": cc, "link": link},
+    }
+
+
 def run_build(
     name: str,
     version: str,
@@ -406,23 +442,37 @@ def run_build(
     plat: str | None = None,
     tag: str | None = None,
     platform_pattern: str | None = None,
+    lock: dict | None = None,
+    lock_sha256: str | None = None,
 ) -> dict:
     """Download the sdist, build the wheel from a fixed folder, hash it, and (first attempt) install it from a local
     folder into a fresh venv with nothing compiled. On Linux the wheel is repaired to `plat` (auditwheel); on Windows
     the DLLs it needs that a user may lack are bundled (delvewheel); a py3-none-<platform> wheel is retagged to `tag`,
     the target's one publishable tag. All before hashing, so both builds are compared as published. Fields left None
     mean that step didn't happen."""
-    fields: dict = {"sdist": None, "sdist_sha256": None, "wheel": None, "sha256": None, "installs": None}
+    fields: dict = {"sdist": None, "sdist_sha256": None, "wheel": None, "sha256": None,
+                    "installs": None, "tools": None}
     env = dict(os.environ, PIP_DISABLE_PIP_VERSION_CHECK="1", PIP_NO_INPUT="1")
-    sdists = work / "sdist"
-    pip = [sys.executable, "-m", "pip"]
-    subprocess.run([*pip, "download", "--no-deps", "--no-binary", name, "--no-cache-dir", "-d", str(sdists),
-                    f"{name}=={version}"], check=False, env=env, timeout=BUILD_TIMEOUT)  # fmt: skip
-    found = [p for p in sdists.glob("*") if SDIST.fullmatch(p.name)] if sdists.is_dir() else []
-    if len(found) != 1:
-        print(f"gap_wheels: expected one sdist, found {len(found)}", file=sys.stderr)
+    if lock is None or not build_tool_lock.validate(lock) or build_tool_lock.digest(lock) != lock_sha256:
+        print("gap_wheels: no trusted build-tool lock; refusing unpinned build", file=sys.stderr)
         return fields
-    fields.update(sdist=found[0].name, sdist_sha256=sha256(found[0]))
+    if (lock["name"], lock["version"]) != (build_lab.canonical(name), version):
+        print("gap_wheels: tool lock is for another package or version", file=sys.stderr)
+        return fields
+    sdists = work / "sdist"
+    sdists.mkdir(parents=True, exist_ok=True)
+    found = [sdists / lock["sdist"]]
+    try:
+        build_tool_lock.download_locked({"url": lock["sdist_url"], "sha256": lock["sdist_sha256"]}, found[0])
+        fields.update(sdist=found[0].name, sdist_sha256=sha256(found[0]))
+        py, packages = build_tool_lock.create_build_environment(lock, work)
+        tools = build_tool_provenance(lock_sha256, packages, lock["target"])
+        if not tools["compiler"]["cc"] or not tools["compiler"]["link"] or not tools["runner_image"]:
+            raise build_tool_lock.LockError("compiler or runner image version cannot be identified")
+        fields["tools"] = tools
+    except (build_tool_lock.LockError, OSError, subprocess.SubprocessError) as exc:
+        print(f"gap_wheels: locked build setup failed: {exc}", file=sys.stderr)
+        return fields
     fixed = Path("C:/gw" if os.name == "nt" else "/tmp/gw")
     try:
         src = unpack(found[0], fixed)
@@ -431,7 +481,8 @@ def run_build(
         return fields
     out = work / "out"
     try:
-        p = subprocess.run([*pip, "wheel", "--no-deps", "--no-cache-dir", "-w", str(out), str(src)], check=False,
+        p = subprocess.run([str(py), "-m", "pip", "wheel", "--no-build-isolation", "--no-index", "--no-deps",
+                            "--no-cache-dir", "-w", str(out), str(src)], check=False,
                            env=build_env(), capture_output=True, text=True, errors="replace",
                            timeout=BUILD_TIMEOUT)  # fmt: skip
         print((p.stdout + p.stderr)[-6000:])
@@ -439,7 +490,7 @@ def run_build(
         print("gap_wheels: the build timed out", file=sys.stderr)
         return fields
     wheels = sorted(out.glob("*.whl")) if out.is_dir() else []
-    if len(wheels) != 1 or not WHEEL.fullmatch(wheels[0].name):
+    if p.returncode != 0 or len(wheels) != 1 or not WHEEL.fullmatch(wheels[0].name):
         print(f"gap_wheels: expected one wheel, found {len(wheels)}", file=sys.stderr)
         return fields
     finished = finish_wheel(wheels[0], work, plat, tag, platform_pattern)
@@ -486,8 +537,15 @@ def cmd_build(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         keep = Path(args.wheel_dir) if args.wheel_dir else None
         plat = build_lab.TARGETS[args.target].get("plat")
+        job = {"name": args.name, "version": args.version, "target": target}
+        try:
+            lock = build_tool_lock.load_lock(Path(args.lock_bundle), args.pair_id, args.lock_sha256, job)
+        except (ValueError, OSError, KeyError) as exc:
+            print(f"gap_wheels: refusing build without coordinator lock: {exc}", file=sys.stderr)
+            return 2
         fields = run_build(args.name, args.version, args.attempt, Path(tmp), members, keep, plat=plat,
-                           tag=PUBLISH_TAGS.get(target), platform_pattern=build_lab.TARGETS[target]["wheel"])
+                           tag=PUBLISH_TAGS.get(target), platform_pattern=build_lab.TARGETS[target]["wheel"],
+                           lock=lock, lock_sha256=args.lock_sha256)
     result = {"schema": SCHEMA, "name": args.name, "version": args.version, "target": target,
               "attempt": args.attempt, "runner": args.runner, **fields}  # fmt: skip
     Path(args.out).write_text(json.dumps(result) + "\n", encoding="utf-8")
@@ -718,8 +776,12 @@ def cmd_dispatch(args: argparse.Namespace) -> int:
         spec = build_lab.TARGETS[job["target"]]  # the plan's own values, checked again: they become a run's inputs
         if not (build_lab.NAME.fullmatch(job["name"]) and build_lab.VERSION.fullmatch(job["version"])):
             raise SystemExit(f"gap_wheels: not a plan job: {job!r}")
+        if not build_tool_lock.SHA.fullmatch(job.get("lock_sha256", "")):
+            raise SystemExit("gap_wheels: no trusted lock digest on planned build")
         fields = {"batch": args.batch, "name": job["name"], "version": job["version"], "target": job["target"],
                   "attempt": str(job["attempt"]), "runner": spec["runner"],
+                  "pair_id": job["id"], "lock_sha256": job["lock_sha256"],
+                  "coordinator_run": args.batch.split("-", 1)[0],
                   # In an image the build runs that image's interpreter for the target, not setup-python's.
                   "python": spec.get("interpreter", spec["python"]) if "image" in spec else spec["python"],
                   "image": spec.get("image", "")}  # fmt: skip
@@ -1902,12 +1964,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--only")
     p.add_argument("--rotate", action="store_true", help="start further on each week (for the scheduled batch)")
     p.add_argument("--github-output")
+    p.add_argument("--lock-out", help="coordinator-only build-tool lock bundle; skip unpinned pairs")
     p.set_defaults(func=cmd_plan)
     b = sub.add_parser("build")
     for flag in ("--name", "--version", "--target", "--runner", "--out"):
         b.add_argument(flag, required=True)
     b.add_argument("--attempt", type=int, required=True)
     b.add_argument("--wheel-dir", help="copy the built wheel here (the build run uploads it as `wheel`)")
+    for flag in ("--lock-bundle", "--lock-sha256", "--pair-id"):
+        b.add_argument(flag, required=True)
     b.set_defaults(func=cmd_build)
     m = sub.add_parser("merge")
     m.add_argument("results")
