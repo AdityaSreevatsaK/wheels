@@ -18,36 +18,59 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.15"
-      - name: Resolve real build locks without building sdists
+      - name: Resolve and exercise real hash-pinned backend builds
         shell: bash
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          from scripts import build_tool_lock
+          import subprocess
+          import tempfile
+          from scripts import build_tool_lock, gap_wheels
           examples = [
               ("lz4", "4.4.5", "3.15 linux-x86_64"),
               ("tiktoken", "0.14.0", "3.14 win-arm64"),
+              ("tiktoken", "0.14.0", "3.15 win-amd64"),
           ]
           successful = 0
+          Path("probe-locks").mkdir(exist_ok=True)
           for name, version, target in examples:
               try:
                   lock = build_tool_lock.resolve({"name": name, "version": version, "target": target})
                   successful += 1
+                  (Path("probe-locks") / (target.replace(" ", "-") + ".json")).write_text(json.dumps(lock))
                   print(json.dumps({"name": name, "target": target, "lock_sha256": build_tool_lock.digest(lock),
                                     "packages": [(w["name"],w["version"]) for w in lock["wheels"]]}, indent=2))
                   if target == "3.15 linux-x86_64":
-                      import tempfile
                       with tempfile.TemporaryDirectory() as folder:
-                          py, packages = build_tool_lock.create_build_environment(lock, Path(folder))
+                          work = Path(folder)
+                          py, packages = build_tool_lock.create_build_environment(lock, work)
                           print(f"VERIFIED LOCKED BUILD ENV: {py} ({len(packages)} build tools)")
+                          sdist = work / lock["sdist"]
+                          build_tool_lock.download_locked({"url": lock["sdist_url"],
+                                                           "sha256": lock["sdist_sha256"]}, sdist)
+                          src = gap_wheels.unpack(sdist, work / "fixed")
+                          wheels = work / "out"
+                          r = subprocess.run([str(py), "-m", "pip", "wheel", "--no-index",
+                                              "--no-build-isolation", "--no-deps", "-w", str(wheels),
+                                              str(src)], capture_output=True, text=True, timeout=240)
+                          print("LOCKED BUILD RESULT", r.returncode, (r.stdout + r.stderr)[-2500:])
+                          if r.returncode or not list(wheels.glob("*.whl")):
+                              raise SystemExit("locked backend could not build lz4 from the verified sdist")
               except Exception as e:
                   print(f"UNRESOLVED {name} {target}: {type(e).__name__}: {e}")
-          if successful == 0:
-              raise SystemExit("no real package build tools could be resolved")
+          if successful != len(examples):
+              raise SystemExit("a real package could not be resolved with all tools pinned")
           PY
+      - name: Share the coordinator's pinned locks for cross-platform installation
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: probe-locks
+          path: probe-locks
+          retention-days: 1
 
   identify-windows:
+    needs: lock-linux
     strategy:
       fail-fast: false
       matrix:
@@ -67,7 +90,12 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python }}
-      - name: Identify real compiler and runner versions without building an sdist
+      - name: Download locks generated on Linux, not re-resolve on Windows
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: probe-locks
+          path: probe-locks
+      - name: Identify real compiler and runner versions and install the coordinator-locked backend
         env:
           TARGET: ${{ matrix.target }}
         shell: pwsh
@@ -75,11 +103,17 @@ jobs:
           @'
           import json
           import os
-          from scripts import gap_wheels
+          import tempfile
+          from pathlib import Path
+          from scripts import build_tool_lock, gap_wheels
           p = gap_wheels.build_tool_provenance("a" * 64, [], os.environ["TARGET"])
           print(json.dumps(p, indent=2))
           if not p["runner_image"]:
               raise SystemExit("runner image version unavailable")
           if not all(p["compiler"].values()):
               raise SystemExit("compiler executable unavailable")
+          lock = json.loads((Path("probe-locks") / (os.environ["TARGET"].replace(" ", "-") + ".json")).read_text())
+          with tempfile.TemporaryDirectory() as folder:
+              py, wheels = build_tool_lock.create_build_environment(lock, Path(folder))
+              print(f"VERIFIED CROSS-PLATFORM LOCKED ENV: {py} ({len(wheels)} wheels)")
           '@ | python -
