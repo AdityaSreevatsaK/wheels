@@ -1,0 +1,85 @@
+name: Temporary provenance integration probe
+
+on:
+  push:
+    branches: [design/4-build-tool-provenance]
+
+permissions:
+  contents: read
+
+jobs:
+  lock-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+      - name: Resolve real build locks without building sdists
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from scripts import build_tool_lock
+          examples = [
+              ("lz4", "4.4.5", "3.15 linux-x86_64"),
+              ("tiktoken", "0.14.0", "3.14 win-arm64"),
+          ]
+          successful = 0
+          for name, version, target in examples:
+              try:
+                  lock = build_tool_lock.resolve({"name": name, "version": version, "target": target})
+                  successful += 1
+                  print(json.dumps({"name": name, "target": target, "lock_sha256": build_tool_lock.digest(lock),
+                                    "packages": [(w["name"],w["version"]) for w in lock["wheels"]]}, indent=2))
+                  if target == "3.15 linux-x86_64":
+                      import tempfile
+                      with tempfile.TemporaryDirectory() as folder:
+                          py, packages = build_tool_lock.create_build_environment(lock, Path(folder))
+                          print(f"VERIFIED LOCKED BUILD ENV: {py} ({len(packages)} build tools)")
+              except Exception as e:
+                  print(f"UNRESOLVED {name} {target}: {type(e).__name__}: {e}")
+          if successful == 0:
+              raise SystemExit("no real package build tools could be resolved")
+          PY
+
+  identify-windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            python: "3.15"
+            target: "3.15 win-amd64"
+          - runner: windows-11-arm
+            python: "3.14"
+            target: "3.14 win-arm64"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Identify real compiler and runner versions without building an sdist
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: pwsh
+        run: |
+          @'
+          import json
+          import os
+          from scripts import gap_wheels
+          p = gap_wheels.build_tool_provenance("a" * 64, [], os.environ["TARGET"])
+          print(json.dumps(p, indent=2))
+          if not p["runner_image"]:
+              raise SystemExit("runner image version unavailable")
+          if not all(p["compiler"].values()):
+              raise SystemExit("compiler executable unavailable")
+          '@ | python -
