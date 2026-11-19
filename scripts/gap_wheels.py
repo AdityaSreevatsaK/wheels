@@ -410,12 +410,15 @@ def namespace_folders(wheel: Path) -> list[str]:
 
 
 
-def _tool_version(cmd: list[str]) -> str:
-    """Record the version text of the compiler actually available on this runner."""
+def _tool_version(cmd: list[str], *, include_path: bool = True) -> str:
+    """Record the tool version; omit the ephemeral venv path for hash-locked tools."""
     try:
         result = subprocess.run(cmd, check=False, capture_output=True, text=True, errors="replace", timeout=20)
+        version = " ".join((result.stdout + "\n" + result.stderr).split())
+        if not include_path:
+            return version[:450]
         command = str(Path(cmd[0]).resolve()) if Path(cmd[0]).is_file() else (shutil.which(cmd[0]) or cmd[0])
-        return (command + ": " + " ".join((result.stdout + "\n" + result.stderr).split()))[:450]
+        return (command + ": " + version)[:450]
     except (OSError, subprocess.SubprocessError):
         return ""
 
@@ -517,17 +520,24 @@ def expected_repair_tools(target: str) -> list[dict[str, str]]:
             for package in sorted(set(tools))]
 
 
-def build_tool_provenance(lock_sha256: str, packages: list[dict], target: str) -> dict:
+def build_tool_provenance(
+    lock_sha256: str, packages: list[dict], target: str, build_bin: Path | None = None
+) -> dict:
     """Record tools before the sdist's build backend is executed."""
     image = build_lab.TARGETS[target].get("image") or os.environ.get("ImageVersion", "")
     if os.name == "nt":
-        # The same selected compiler is inserted into the backend's PATH.
+        # vcvarsall sets its own PATH. Put the hash-locked venv back first so
+        # the backend cannot use Visual Studio's bundled cmake or ninja.
         cc, link = _msvc_tools(target)
+        if build_bin is not None:
+            os.environ["PATH"] = f"{build_bin}{os.pathsep}{os.environ.get('PATH', '')}"
     else:
         cc = _tool_version(["cc", "--version"])
         link = _tool_version(["ld", "--version"])
     rustc = _tool_version(["rustc", "--version", "--verbose"])
-    cmake = _tool_version(["cmake", "--version"])
+    # cmake's executable lives under a random build-venv path. Its wheel
+    # identity is already pinned by lock_sha256, so record just its version.
+    cmake = _tool_version(["cmake", "--version"], include_path=False)
     return {
         "lock_sha256": lock_sha256,
         "packages": [{"name": w["name"], "version": w["version"], "sha256": w["sha256"],
@@ -578,7 +588,7 @@ def run_build(
         # Build backends may invoke a locked Python-supplied cmake/ninja executable.
         # This PATH is also used by the compiler version probes and build process.
         os.environ["PATH"] = f"{py.parent}{os.pathsep}{os.environ.get('PATH', '')}"
-        tools = build_tool_provenance(lock_sha256, packages, lock["target"])
+        tools = build_tool_provenance(lock_sha256, packages, lock["target"], build_bin=py.parent)
         if not tools["compiler"]["cc"] or not tools["compiler"]["link"] or not tools["runner_image"]:
             raise build_tool_lock.LockError("compiler or runner image version cannot be identified")
         fields["tools"] = tools
