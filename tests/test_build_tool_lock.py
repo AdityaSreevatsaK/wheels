@@ -94,6 +94,52 @@ class ReadSdist(unittest.TestCase):
 
 
 class Coordinator(unittest.TestCase):
+    def test_build_provenance_matches_across_different_temporary_directories(self):
+        # The locked CMake executable has a different absolute path on each
+        # runner. That path must not make two otherwise identical builds fail
+        # the toolchain equality check in verify().
+        records = []
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            for directory in (first, second):
+                cmake = Path(directory) / "build-venv" / "bin" / "cmake"
+
+                def which(command):
+                    return str(cmake) if command == "cmake" else f"/usr/bin/{command}"
+
+                with (
+                    mock.patch.object(gap_wheels.subprocess, "run",
+                                      return_value=subprocess.CompletedProcess([], 0, "version 3.31", "")),
+                    mock.patch.object(gap_wheels.shutil, "which", side_effect=which),
+                ):
+                    records.append(gap_wheels.build_tool_provenance(
+                        "a" * 64, [], "3.14 musl-aarch64"
+                    ))
+        self.assertEqual(records[0], records[1])
+        self.assertEqual(records[0]["compiler"]["cmake"], "version 3.31")
+        self.assertNotIn("build-venv", records[0]["compiler"]["cmake"])
+
+    def test_windows_vcvarsall_does_not_override_locked_build_tools(self):
+        build_bin = Path("C:/build-venv/Scripts")
+
+        def activate_msvc(target):
+            gap_wheels.os.environ["PATH"] = "C:/VisualStudio/CMake;C:/Windows/System32"
+            return "cl 19.0", "link 14.0"
+
+        with (
+            mock.patch.dict(gap_wheels.os.environ, {"PATH": "original", "ImageVersion": "runner"}, clear=False),
+            mock.patch.object(gap_wheels.os, "name", "nt"),
+            mock.patch.object(gap_wheels, "_msvc_tools", side_effect=activate_msvc),
+            mock.patch.object(gap_wheels, "_tool_version", return_value="version"),
+        ):
+            tools = gap_wheels.build_tool_provenance(
+                "a" * 64, [], "3.15 win-amd64", build_bin=build_bin
+            )
+            self.assertEqual(
+                gap_wheels.os.environ["PATH"].split(gap_wheels.os.pathsep)[0], str(build_bin)
+            )
+            self.assertIn("VisualStudio", gap_wheels.os.environ["PATH"])
+            self.assertEqual(tools["compiler"]["cc"], "cl 19.0")
+
     def test_windows_compiler_selection_initialises_and_checks_toolset(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
