@@ -119,7 +119,7 @@ class Coordinator(unittest.TestCase):
         self.assertNotIn("build-venv", records[0]["compiler"]["cmake"])
 
     def test_windows_vcvarsall_does_not_override_locked_build_tools(self):
-        build_bin = Path("C:/build-venv/Scripts")
+        build_bin = Path("/locked/build-venv/Scripts")  # portable in this Linux-hosted Windows simulation
 
         def activate_msvc(target):
             gap_wheels.os.environ["PATH"] = "C:/VisualStudio/CMake;C:/Windows/System32"
