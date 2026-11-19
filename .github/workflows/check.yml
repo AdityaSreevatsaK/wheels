@@ -5,7 +5,7 @@ name: Check
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, docs/17-self-verification-and-bug-report]
 
 permissions:
   contents: read
