@@ -428,6 +428,96 @@ class Index(unittest.TestCase):
         self.assertNotIn("releases/download", (site / "simple/tiktoken/index.html").read_text())  # same-version abi3
 
 
+    def test_status_json_is_sorted_and_has_a_stable_schema(self):
+        wheels = [
+            wheel(name="Zope.Interface", file="zope_interface-8.7-cp314-cp314-win_arm64.whl", version="8.7"),
+            wheel(),
+        ]
+        site = self.build(wheels)
+        status = json.loads((site / "data/status.json").read_text(encoding="utf-8"))
+        self.assertEqual(status["schema"], 1)
+        self.assertEqual(status["index"], build_gap_index.INDEX_URL)
+        self.assertEqual([row["project"] for row in status["wheels"]], ["tiktoken", "zope-interface"])
+        self.assertEqual(len(status["wheels"]), 2)
+        expected_keys = {"project", "version", "target", "wheel", "sha256", "url", "status", "yank_reason"}
+        for row in status["wheels"]:
+            self.assertEqual(set(row), expected_keys)
+            self.assertEqual(row["sha256"], SHA)
+            self.assertEqual(row["url"], build_gap_index.RELEASE_URL + row["wheel"])
+            self.assertEqual(row["status"], "in-index")
+            self.assertIsNone(row["yank_reason"])
+        self.assertIn('href="data/status.json"', (site / "index.html").read_text(encoding="utf-8"))
+        self.assertEqual(
+            json.loads((site / "data/gap-wheels.json").read_text())["wheels"],
+            wheels,
+        )
+
+    def test_status_json_yanked_release_preserves_reason_including_empty(self):
+        source = "tiktoken-0.14.0.tar.gz"
+        for reason, expected in (("broken release", "broken release"), (True, "")):
+            with self.subTest(reason=reason):
+                site = self.build([wheel()], {"tiktoken": [pypi_file(source, yanked=reason)]})
+                entry = json.loads((site / "data/status.json").read_text())["wheels"][0]
+                self.assertEqual(entry["status"], "yanked")
+                self.assertEqual(entry["yank_reason"], expected)
+                page = (site / "simple/tiktoken/index.html").read_text()
+                self.assertIn(f'data-yanked="{expected}"', page)
+
+    def test_status_json_withdrawn_when_pypi_has_matching_wheel(self):
+        filename = "tiktoken-0.14.0-cp314-cp314-win_arm64.whl"
+        site = self.build([wheel()], {"tiktoken": [pypi_file(filename)]})
+        entry = json.loads((site / "data/status.json").read_text())["wheels"][0]
+        self.assertEqual(entry["status"], "withdrawn-pypi-has-wheel")
+        self.assertIsNone(entry["yank_reason"])
+        self.assertNotIn("releases/download/gap-wheels/", (site / "simple/tiktoken/index.html").read_text())
+
+    def test_status_json_withdrawn_when_release_is_gone(self):
+        site = self.build([wheel()], sdists=False)
+        entry = json.loads((site / "data/status.json").read_text())["wheels"][0]
+        self.assertEqual(entry["status"], "withdrawn-release-gone")
+        self.assertIsNone(entry["yank_reason"])
+        self.assertNotIn("releases/download/gap-wheels/", (site / "simple/tiktoken/index.html").read_text())
+
+    def test_status_json_marks_unreadable_pypi_only_for_explicit_omit(self):
+        bad = pypi_file("tiktoken-0.14.0.tar.gz", url="https://untrusted.example/sdist.tar.gz")
+        site = self.build([wheel()], {"tiktoken": [bad]}, omit_failing=True)
+        entry = json.loads((site / "data/status.json").read_text())["wheels"][0]
+        self.assertEqual(entry["status"], "left-out-pypi-unreadable")
+        self.assertIsNone(entry["yank_reason"])
+        self.assertFalse((site / "simple/tiktoken").exists())
+        # The default failure path must not create a partial site or status.json.
+        site = self.build([wheel()], {"tiktoken": [bad]}, expect=1)
+        self.assertFalse(site.exists())
+        self.assertFalse((site / "data/status.json").exists())
+
+    def test_status_json_is_identical_for_identical_inputs(self):
+        wheels = [wheel()]
+        a = (self.build(wheels) / "data/status.json").read_bytes()
+        b = (self.build(wheels) / "data/status.json").read_bytes()
+        self.assertEqual(a, b)
+        self.assertTrue(a.endswith(b"\n"))
+        self.assertNotIn(b"generated_at", a)
+
+    def test_status_json_keeps_yank_reasons_across_projects(self):
+        wheels = [wheel(), wheel(name="lz4", file="lz4-4.4.5-cp314-cp314-win_arm64.whl", version="4.4.5")]
+        site = self.build(wheels, {"lz4": [pypi_file("lz4-4.4.5.tar.gz", yanked="bad build")]})
+        rows = {row["project"]: row for row in json.loads((site / "data/status.json").read_text())["wheels"]}
+        self.assertEqual((rows["lz4"]["status"], rows["lz4"]["yank_reason"]), ("yanked", "bad build"))
+        self.assertEqual((rows["tiktoken"]["status"], rows["tiktoken"]["yank_reason"]), ("in-index", None))
+
+    def test_status_json_nulls_version_and_target_that_arent_strings(self):
+        odd = wheel(target=3)
+        del odd["version"]
+        site = self.build([odd])
+        row = json.loads((site / "data/status.json").read_text())["wheels"][0]
+        self.assertEqual((row["version"], row["target"], row["status"]), (None, None, "in-index"))
+
+    def test_status_json_omits_entries_the_index_rejects(self):
+        site = self.build([wheel(), wheel(name="../unsafe"), wheel(sha256="invalid")])
+        rows = json.loads((site / "data/status.json").read_text())["wheels"]
+        self.assertEqual([row["wheel"] for row in rows], [wheel()["wheel"]])
+
+
 class Requests(Index):
     LGBM = "lightgbm-4.7.0-cp314-cp314-win_arm64.whl"
 
