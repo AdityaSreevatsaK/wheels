@@ -100,6 +100,59 @@ when it gave none) and `null` otherwise. A wheel that was taken down or opted ou
 "Distributable Code" terms of Visual Studio, as many wheels on PyPI do (numpy's Windows wheels, for one). The
 package's own licence, which staging checks, doesn't cover them.
 
+## Checking a wheel yourself
+
+Use the filename and SHA-256 of a currently published wheel from
+[`data/gap-wheels.json`](data/gap-wheels.json). The examples below use
+`lightgbm-4.7.0-cp314-cp314-win_arm64.whl` and `lz4-4.4.5-cp314-cp314t-manylinux_2_28_x86_64.whl`;
+substitute another published filename for your platform. The attestation check needs the
+[GitHub CLI](https://cli.github.com/), signed in (`gh auth login`), and the Linux example also needs `jq`.
+
+**Windows (PowerShell):**
+
+```powershell
+$wheel = "lightgbm-4.7.0-cp314-cp314-win_arm64.whl"
+Invoke-WebRequest "https://github.com/wheelgap/wheels/releases/download/gap-wheels/$wheel" -OutFile $wheel -UseBasicParsing
+$index = Invoke-RestMethod "https://raw.githubusercontent.com/wheelgap/wheels/main/data/gap-wheels.json"
+$expected = @($index.wheels | Where-Object { $_.wheel -eq $wheel })
+$actual = (Get-FileHash $wheel -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($expected.Count -eq 1 -and $actual -eq $expected[0].sha256) { "sha256 OK"; gh attestation verify $wheel -R wheelgap/wheels } else { Write-Error "sha256 mismatch, or the wheel isn't in data/gap-wheels.json" }
+```
+
+**Linux (shell):**
+
+```sh
+wheel="lz4-4.4.5-cp314-cp314t-manylinux_2_28_x86_64.whl"
+curl -fL "https://github.com/wheelgap/wheels/releases/download/gap-wheels/$wheel" -o "$wheel"
+expected="$(curl -fsSL https://raw.githubusercontent.com/wheelgap/wheels/main/data/gap-wheels.json \
+  | jq -r --arg wheel "$wheel" '[.wheels[] | select(.wheel == $wheel) | .sha256] | if length == 1 then .[0] else empty end')"
+actual="$(sha256sum "$wheel" | cut -d ' ' -f1)"
+if [ -n "$expected" ] && [ "$actual" = "$expected" ]; then
+  echo "sha256 OK" && gh attestation verify "$wheel" -R wheelgap/wheels
+else
+  echo "sha256 mismatch, or the wheel isn't in data/gap-wheels.json" >&2
+fi
+```
+
+The hash comparison shows you downloaded the exact file recorded in this repo. pip also checks the
+`#sha256=` fragment in the index's link on every download. The attestation shows that a workflow in this repo
+attested that exact file, and names the workflow and commit: `gap-wheels.yml` for wheels published here. Wheels
+whose `publish_run` is in wheelgap/tracker were published before the pipeline moved to this repo; their
+attestation here names `migrate.yml`, and the original publish attestation is in the tracker
+(`gh attestation verify FILE.whl -R wheelgap/tracker`). Neither shows that the sdist or its dependencies are
+safe; see the [threat model](#threat-model).
+
+You can check the source separately. The entry's `sdist_sha256` should match the sha256 PyPI lists for its
+`sdist` file:
+
+```sh
+curl -fsSL https://pypi.org/pypi/lz4/4.4.5/json | jq -r '.urls[] | select(.filename == "lz4-4.4.5.tar.gz") | .digests.sha256'
+```
+
+The entry's two `builds` links are the separate workflow runs that built the pair; their logs show both builds
+(GitHub keeps run logs for 90 days). The logs and the attestation help audit where a wheel came from, not
+whether its source is safe.
+
 ## Threat model
 
 **What the pipeline defends against**
@@ -142,7 +195,21 @@ package's own licence, which staging checks, doesn't cover them.
 **If something goes wrong**
 
 A wheel is withdrawn by removing its entry from `data/gap-wheels.json` and its file from the release. The index
-redeploys without it within minutes. Report a problem as described in [SECURITY.md](SECURITY.md).
+redeploys without it within minutes. Report unsafe wheels or potential security issues
+**privately** as described in [SECURITY.md](SECURITY.md). For an install, import or runtime
+failure without a suspected security problem, use the
+[public broken-wheel report](https://github.com/wheelgap/wheels/issues/new?template=broken-wheel.yml).
+
+## Reporting a wheel that doesn't work
+
+If a published wheel fails to install or import, or crashes while the same source
+release works, [open a broken-wheel issue](https://github.com/wheelgap/wheels/issues/new?template=broken-wheel.yml).
+Include the wheel filename, Python version, OS details, installer version, exact
+command and full error, and whether a source build works on the same machine.
+For pip, you can try `python -m pip install --no-binary NAME NAME==VERSION`
+in a fresh environment (only if you trust the package and can build it there).
+Do **not** post a suspected unsafe or malicious wheel publicly: use
+[private vulnerability reporting](SECURITY.md) instead.
 
 ## Opting out
 
