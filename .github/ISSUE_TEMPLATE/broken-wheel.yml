@@ -1,6 +1,7 @@
 name: Broken wheel report
 description: Report a published wheel that fails to install, import, or run (non-security issue).
 title: "Broken wheel: "
+labels: ["bug"]
 body:
   - type: markdown
     attributes:

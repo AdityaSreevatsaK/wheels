@@ -85,26 +85,28 @@ lots of outside contributions. Changes here are made by the maintainers, and eve
    It then attests the files (`gh attestation verify FILE.whl -R wheelgap/wheels`), uploads them to the `gap-wheels`
    release, records them in `data/gap-wheels.json` and deploys the index.
 
+**Bundled Microsoft DLLs.** Some Windows wheels carry Microsoft Visual C++ runtime files (`msvcp140.dll`,
+`vcomp140.dll` and the like) in `<dist>.libs/`. They're Microsoft's, not the package's, redistributed under the
+"Distributable Code" terms of Visual Studio, as many wheels on PyPI do (numpy's Windows wheels, for one). The
+package's own licence, which staging checks, doesn't cover them.
+
 ## Checking a wheel yourself
 
-Use the filename and SHA-256 shown for a currently published wheel in
-[`data/gap-wheels.json`](data/gap-wheels.json). The example below is for
-`fastuuid-0.14.0-cp314-cp314-win_arm64.whl`; substitute another published filename
-if you are using a different platform. Install the
-[GitHub CLI](https://cli.github.com/) for the attestation check (and `jq` for
-the Linux JSON lookup).
+Use the filename and SHA-256 of a currently published wheel from
+[`data/gap-wheels.json`](data/gap-wheels.json). The examples below use
+`lightgbm-4.7.0-cp314-cp314-win_arm64.whl` and `lz4-4.4.5-cp314-cp314t-manylinux_2_28_x86_64.whl`;
+substitute another published filename for your platform. The attestation check needs the
+[GitHub CLI](https://cli.github.com/), signed in (`gh auth login`), and the Linux example also needs `jq`.
 
 **Windows (PowerShell):**
 
 ```powershell
-$wheel = "fastuuid-0.14.0-cp314-cp314-win_arm64.whl"
-Invoke-WebRequest "https://github.com/wheelgap/wheels/releases/download/gap-wheels/$wheel" -OutFile $wheel
+$wheel = "lightgbm-4.7.0-cp314-cp314-win_arm64.whl"
+Invoke-WebRequest "https://github.com/wheelgap/wheels/releases/download/gap-wheels/$wheel" -OutFile $wheel -UseBasicParsing
 $index = Invoke-RestMethod "https://raw.githubusercontent.com/wheelgap/wheels/main/data/gap-wheels.json"
 $expected = @($index.wheels | Where-Object { $_.wheel -eq $wheel })
-if ($expected.Count -ne 1) { throw "Wheel missing or duplicated in published index" }
 $actual = (Get-FileHash $wheel -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($actual -ne $expected[0].sha256) { throw "SHA-256 mismatch" }
-gh attestation verify $wheel -R wheelgap/wheels
+if ($expected.Count -eq 1 -and $actual -eq $expected[0].sha256) { "sha256 OK"; gh attestation verify $wheel -R wheelgap/wheels } else { Write-Error "sha256 mismatch, or the wheel isn't in data/gap-wheels.json" }
 ```
 
 **Linux (shell):**
@@ -115,29 +117,31 @@ curl -fL "https://github.com/wheelgap/wheels/releases/download/gap-wheels/$wheel
 expected="$(curl -fsSL https://raw.githubusercontent.com/wheelgap/wheels/main/data/gap-wheels.json \
   | jq -r --arg wheel "$wheel" '[.wheels[] | select(.wheel == $wheel) | .sha256] | if length == 1 then .[0] else empty end')"
 actual="$(sha256sum "$wheel" | cut -d ' ' -f1)"
-test -n "$expected" && test "$actual" = "$expected" || { echo "SHA-256 mismatch or missing entry" >&2; exit 1; }
-gh attestation verify "$wheel" -R wheelgap/wheels
+if [ -n "$expected" ] && [ "$actual" = "$expected" ]; then
+  echo "sha256 OK" && gh attestation verify "$wheel" -R wheelgap/wheels
+else
+  echo "sha256 mismatch, or the wheel isn't in data/gap-wheels.json" >&2
+fi
 ```
 
-The hash comparison checks that you downloaded the exact file recorded in this repo.
-pip also checks the `#sha256=` fragment in the package index link on **every**
-download. GitHub's attestation verifies that this repository's publish workflow
-published the exact file and identifies the workflow and commit. It **does not**
-prove that the source distribution or its dependencies are safe; see the
-[threat model](#threat-model).
+The hash comparison shows you downloaded the exact file recorded in this repo. pip also checks the
+`#sha256=` fragment in the index's link on every download. The attestation shows that a workflow in this repo
+attested that exact file, and names the workflow and commit: `gap-wheels.yml` for wheels published here. Wheels
+whose `publish_run` is in wheelgap/tracker were published before the pipeline moved to this repo; their
+attestation here names `migrate.yml`, and the original publish attestation is in the tracker
+(`gh attestation verify FILE.whl -R wheelgap/tracker`). Neither shows that the sdist or its dependencies are
+safe; see the [threat model](#threat-model).
 
-You can check the upstream source distribution separately. Find the entry's
-`sdist` and `sdist_sha256` in `data/gap-wheels.json`, then visit
-`https://pypi.org/pypi/NAME/VERSION/json` (substitute the entry's name and
-version). In its `urls` list, find the file with that exact `sdist` filename
-and compare `digests.sha256` with `sdist_sha256`. The entry's two `builds`
-links lead to the separate GitHub Actions runs that built the wheel pair.
-Those build logs and the attestation help audit provenance, not source safety.
+You can check the source separately. The entry's `sdist_sha256` should match the sha256 PyPI lists for its
+`sdist` file:
 
-**Bundled Microsoft DLLs.** Some Windows wheels carry Microsoft Visual C++ runtime files (`msvcp140.dll`,
-`vcomp140.dll` and the like) in `<dist>.libs/`. They're Microsoft's, not the package's, redistributed under the
-"Distributable Code" terms of Visual Studio, as many wheels on PyPI do (numpy's Windows wheels, for one). The
-package's own licence, which staging checks, doesn't cover them.
+```sh
+curl -fsSL https://pypi.org/pypi/lz4/4.4.5/json | jq -r '.urls[] | select(.filename == "lz4-4.4.5.tar.gz") | .digests.sha256'
+```
+
+The entry's two `builds` links are the separate workflow runs that built the pair; their logs show both builds
+(GitHub keeps run logs for 90 days). The logs and the attestation help audit where a wheel came from, not
+whether its source is safe.
 
 ## Threat model
 
