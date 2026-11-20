@@ -456,6 +456,20 @@ class Index(unittest.TestCase):
         self.assertTrue(a.endswith(b"\n"))
         self.assertNotIn(b"generated_at", a)
 
+    def test_status_json_keeps_yank_reasons_across_projects(self):
+        wheels = [wheel(), wheel(name="lz4", file="lz4-4.4.5-cp314-cp314-win_arm64.whl", version="4.4.5")]
+        site = self.build(wheels, {"lz4": [pypi_file("lz4-4.4.5.tar.gz", yanked="bad build")]})
+        rows = {row["project"]: row for row in json.loads((site / "data/status.json").read_text())["wheels"]}
+        self.assertEqual((rows["lz4"]["status"], rows["lz4"]["yank_reason"]), ("yanked", "bad build"))
+        self.assertEqual((rows["tiktoken"]["status"], rows["tiktoken"]["yank_reason"]), ("in-index", None))
+
+    def test_status_json_nulls_version_and_target_that_arent_strings(self):
+        odd = wheel(target=3)
+        del odd["version"]
+        site = self.build([odd])
+        row = json.loads((site / "data/status.json").read_text())["wheels"][0]
+        self.assertEqual((row["version"], row["target"], row["status"]), (None, None, "in-index"))
+
     def test_status_json_omits_entries_the_index_rejects(self):
         site = self.build([wheel(), wheel(name="../unsafe"), wheel(sha256="invalid")])
         rows = json.loads((site / "data/status.json").read_text())["wheels"]

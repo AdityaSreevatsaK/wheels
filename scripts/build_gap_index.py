@@ -485,8 +485,8 @@ def build(
     (site / "index.html").write_text(human_page(by_project, gone, requests), encoding="utf-8")
     (site / "data").mkdir(exist_ok=True)
     (site / "data" / "gap-wheels.json").write_text(json.dumps(data, indent=1) + "\n", encoding="utf-8")
-    # Derived alongside the index, never inferred later from human-readable status text.
-    # Preserve an empty string when PyPI yanks a release without giving a reason.
+    # Each status is set where build() decides it, never parsed back out of `gone`'s text. `usable` doesn't check
+    # `version` or `target`, so anything but a string is null rather than a KeyError that would stop a takedown.
     wheel_status = {
         "schema": 1,
         "index": INDEX_URL,
@@ -494,8 +494,8 @@ def build(
             (
                 {
                     "project": project,
-                    "version": w["version"],
-                    "target": w["target"],
+                    "version": w["version"] if isinstance(w.get("version"), str) else None,
+                    "target": w["target"] if isinstance(w.get("target"), str) else None,
                     "wheel": w["wheel"],
                     "sha256": w["sha256"],
                     "url": RELEASE_URL + w["wheel"],
