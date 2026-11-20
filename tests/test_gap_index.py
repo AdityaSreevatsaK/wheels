@@ -1,5 +1,6 @@
 import http.client
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,6 +33,81 @@ def pypi_file(filename, **over):
 
 def no_network(project):
     raise AssertionError(f"a test fetched {project} from PyPI")
+
+
+class FileNames(unittest.TestCase):
+    """Direct, offline coverage for the file-name and platform helpers."""
+
+    def test_wheel_tags_five_and_six_parts(self):
+        expected = {("cp314", "cp314", "win_arm64")}
+        self.assertEqual(build_gap_index.wheel_tags("Foo_Bar-1.0RC1-cp314-cp314-win_arm64.whl"),
+                         ("foo-bar", "1.0rc1", expected))
+        self.assertEqual(build_gap_index.wheel_tags("Foo_Bar-1.0RC1-1-cp314-cp314-win_arm64.whl"),
+                         ("foo-bar", "1.0rc1", expected))
+
+    def test_wheel_tags_expand_compressed_sets(self):
+        filename = "foo_bar-1.0-cp314.cp315-abi3.none-win_arm64.manylinux_2_28_x86_64.whl"
+        parsed = build_gap_index.wheel_tags(filename)
+        self.assertIsNotNone(parsed)
+        name, version, tags = parsed
+        self.assertEqual((name, version), ("foo-bar", "1.0"))
+        self.assertEqual(tags, {(py, abi, plat)
+                                for py in ("cp314", "cp315")
+                                for abi in ("abi3", "none")
+                                for plat in ("win_arm64", "manylinux_2_28_x86_64")})
+        self.assertIsNone(build_gap_index.wheel_tags("foo-1.0.tar.gz"))
+        self.assertIsNone(build_gap_index.wheel_tags("foo-1.0-cp314-win_arm64.whl"))
+
+    def test_file_version_for_wheels_and_sdists(self):
+        cases = {
+            "tiktoken-0.14.0RC1-cp314-cp314-win_arm64.whl": "0.14.0rc1",
+            "tiktoken-0.14.0RC1.tar.gz": "0.14.0rc1",
+            "tiktoken-0.14.0RC1.zip": "0.14.0rc1",
+            "tiktoken-0.14.0-py3-none-any.whl": "0.14.0",
+            "other-1.0.tar.gz": None,
+        }
+        for filename, expected in cases.items():
+            with self.subTest(filename=filename):
+                self.assertEqual(build_gap_index.file_version(filename, "tiktoken"), expected)
+        self.assertIsNone(build_gap_index.file_version("foo-bar-1.0.tar.gz", "foo"))
+
+    def test_release_yank_absent_mixed_and_all_yanked(self):
+        fn1 = "foo-1.0.tar.gz"
+        fn2 = "foo-1.0-py3-none-any.whl"
+        self.assertEqual(build_gap_index.release_yank("1.0", "foo", [(fn1, None)]), (True, None))
+        self.assertEqual(build_gap_index.release_yank("2.0", "foo", [(fn1, "reason")]), (False, None))
+        self.assertEqual(build_gap_index.release_yank("1.0", "foo", [(fn1, "reason"), (fn2, None)]),
+                         (True, None))
+        self.assertEqual(build_gap_index.release_yank("1.0", "foo", [(fn1, "reason"), (fn2, "other")]),
+                         (True, "reason"))
+        self.assertEqual(build_gap_index.release_yank("1.0", "foo", [(fn1, ""), (fn2, "")]), (True, ""))
+
+    def test_linux_platform_standard_and_legacy_tags(self):
+        self.assertEqual(build_gap_index.linux_platform("manylinux_2_28_x86_64"),
+                         ("manylinux", 2, 28, "x86_64"))
+        self.assertEqual(build_gap_index.linux_platform("musllinux_1_2_aarch64"),
+                         ("musllinux", 1, 2, "aarch64"))
+        for name, version, arch in (("manylinux1", 5, "i686"),
+                                    ("manylinux2010", 12, "x86_64"),
+                                    ("manylinux2014", 17, "x86_64")):
+            self.assertEqual(build_gap_index.linux_platform(f"{name}_{arch}"),
+                             ("manylinux", 2, version, arch))
+        for invalid in ("linux_x86_64", "win_arm64", "manylinux2014_x86_64.evil"):
+            self.assertIsNone(build_gap_index.linux_platform(invalid))
+
+    def test_platform_covers_same_libc_and_architecture(self):
+        self.assertTrue(build_gap_index.platform_covers("manylinux_2_28_x86_64",
+                                                        "manylinux_2_28_x86_64"))
+        self.assertTrue(build_gap_index.platform_covers("manylinux2014_x86_64",
+                                                        "manylinux_2_28_x86_64"))
+        self.assertTrue(build_gap_index.platform_covers("manylinux_2_17_x86_64",
+                                                        "manylinux_2_28_x86_64"))
+        self.assertFalse(build_gap_index.platform_covers("manylinux_2_28_x86_64",
+                                                         "manylinux_2_17_x86_64"))
+        self.assertFalse(build_gap_index.platform_covers("musllinux_1_2_x86_64",
+                                                         "manylinux_2_28_x86_64"))
+        self.assertFalse(build_gap_index.platform_covers("manylinux_2_17_aarch64",
+                                                         "manylinux_2_28_x86_64"))
 
 
 class Index(unittest.TestCase):
@@ -87,6 +163,81 @@ class Index(unittest.TestCase):
         self.assertNotIn("unsafe-best-match", page)
         project = (site / "simple/tiktoken/index.html").read_text()
         self.assertIn('data-requires-python="&quot;&gt;&lt;x"', project)
+
+    def test_published_wheel_has_install_command_and_hash(self):
+        page = (self.build([wheel()]) / "index.html").read_text()
+        self.assertIn('<th scope="col">Install</th>', page)
+        self.assertIn(
+            '<code>pip install --extra-index-url '
+            'https://wheelgap.github.io/wheels/simple/ tiktoken==0.14.0</code>',
+            page,
+        )
+        self.assertIn(f'<small title="{SHA}">{SHA[:12]}</small>', page)
+        self.assertIn('<div class="matrix-scroll" tabindex="0" role="region" aria-labelledby="published_wheels">', page)
+        self.assertNotIn("<script", page)
+
+    def test_published_table_has_unique_accessible_links_and_keyboard_scrolling(self):
+        wheels = [
+            wheel(builds=["https://github.com/wheelgap/tracker/actions/runs/1",
+                          "https://github.com/wheelgap/tracker/actions/runs/2"]),
+            wheel(name="lz4", file="lz4-4.4.5-cp314-cp314-win_arm64.whl", version="4.4.5",
+                  builds=["https://github.com/wheelgap/tracker/actions/runs/3",
+                          "https://github.com/wheelgap/tracker/actions/runs/4"]),
+        ]
+        page = (self.build(wheels) / "index.html").read_text(encoding="utf-8")
+        heading = '<h2 id="published_wheels">Published wheels</h2>'
+        self.assertIn(heading, page)
+        self.assertEqual(page.count('id="published_wheels"'), 1)
+        self.assertIn(
+            '<div class="matrix-scroll" tabindex="0" role="region" aria-labelledby="published_wheels">',
+            page,
+        )
+        thead = page.split("<thead>", 1)[1].split("</thead>", 1)[0]
+        headers = re.findall(r"<th\b[^>]*>", thead)
+        self.assertEqual(len(headers), 8)
+        self.assertTrue(all('scope="col"' in header for header in headers))
+
+        links = re.findall(r'<a href="[^"]+" aria-label="([^"]+)">(wheel|build [12])</a>', page)
+        self.assertEqual(len(links), 6)
+        self.assertEqual(len({label for label, _ in links}), len(links))
+        for label, visible_text in links:
+            self.assertTrue(label.startswith(visible_text + " "), label)
+        self.assertNotIn("<script", page)
+
+    def test_current_published_data_has_accessible_links_without_scripts(self):
+        path = Path(__file__).resolve().parents[1] / "data" / "gap-wheels.json"
+        published = json.loads(path.read_text(encoding="utf-8"))["wheels"]
+        page = build_gap_index.human_page(build_gap_index.projects(published))
+        for entry in published:
+            with self.subTest(wheel=entry["wheel"]):
+                self.assertIn(f'aria-label="wheel {entry["wheel"]}"', page)
+                for n in (1, 2):
+                    self.assertIn(f'aria-label="build {n} of {entry["wheel"]}"', page)
+        self.assertEqual(page.count('scope="col"'), 8)
+        self.assertIn('aria-labelledby="published_wheels"', page)
+        self.assertNotIn("<script", page)
+
+    def test_withdrawn_wheel_has_no_install_command(self):
+        filename = "tiktoken-0.14.0-cp314-cp314-win_arm64.whl"
+        page = (self.build([wheel()], {"tiktoken": [pypi_file(filename)]}) / "index.html").read_text()
+        row = page.split('<tr id="tiktoken">', 1)[1].split("</tr>", 1)[0]
+        self.assertIn("withdrawn: PyPI has its own now", row)
+        self.assertIn("<td></td>", row)
+        self.assertNotIn("pip install", row)
+
+    def test_install_command_ignores_untrusted_version_field(self):
+        page = (self.build([wheel(version="1.0; rm -rf ~")]) / "index.html").read_text()
+        row = page.split('<tr id="tiktoken">', 1)[1].split("</tr>", 1)[0]
+        self.assertIn("tiktoken==0.14.0</code>", row)
+        self.assertNotIn("1.0; rm -rf ~", row.split("<code>", 1)[1].split("</code>", 1)[0])
+        self.assertNotIn("<script", page)
+
+    def test_install_command_requires_matching_filename_project(self):
+        mismatched = wheel(name="tiktoken", file="another-0.14.0-cp314-cp314-win_arm64.whl")
+        page = build_gap_index.human_page(build_gap_index.projects([mismatched]))
+        row = page.split('<tr id="tiktoken">', 1)[1].split("</tr>", 1)[0]
+        self.assertNotIn("pip install", row)
+
 
     def test_no_file_yet(self):
         tmp = Path(tempfile.mkdtemp())
@@ -275,6 +426,96 @@ class Index(unittest.TestCase):
         self.assertIn(f"gap-wheels/{ours}", (site / "simple/tiktoken/index.html").read_text())  # spelled differently
         site = self.build([wheel()], {"tiktoken": [pypi_file("tiktoken-0.14.0-cp314-abi3-win_arm64.whl")]})
         self.assertNotIn("releases/download", (site / "simple/tiktoken/index.html").read_text())  # same-version abi3
+
+
+    def test_status_json_is_sorted_and_has_a_stable_schema(self):
+        wheels = [
+            wheel(name="Zope.Interface", file="zope_interface-8.7-cp314-cp314-win_arm64.whl", version="8.7"),
+            wheel(),
+        ]
+        site = self.build(wheels)
+        status = json.loads((site / "data/status.json").read_text(encoding="utf-8"))
+        self.assertEqual(status["schema"], 1)
+        self.assertEqual(status["index"], build_gap_index.INDEX_URL)
+        self.assertEqual([row["project"] for row in status["wheels"]], ["tiktoken", "zope-interface"])
+        self.assertEqual(len(status["wheels"]), 2)
+        expected_keys = {"project", "version", "target", "wheel", "sha256", "url", "status", "yank_reason"}
+        for row in status["wheels"]:
+            self.assertEqual(set(row), expected_keys)
+            self.assertEqual(row["sha256"], SHA)
+            self.assertEqual(row["url"], build_gap_index.RELEASE_URL + row["wheel"])
+            self.assertEqual(row["status"], "in-index")
+            self.assertIsNone(row["yank_reason"])
+        self.assertIn('href="data/status.json"', (site / "index.html").read_text(encoding="utf-8"))
+        self.assertEqual(
+            json.loads((site / "data/gap-wheels.json").read_text())["wheels"],
+            wheels,
+        )
+
+    def test_status_json_yanked_release_preserves_reason_including_empty(self):
+        source = "tiktoken-0.14.0.tar.gz"
+        for reason, expected in (("broken release", "broken release"), (True, "")):
+            with self.subTest(reason=reason):
+                site = self.build([wheel()], {"tiktoken": [pypi_file(source, yanked=reason)]})
+                entry = json.loads((site / "data/status.json").read_text())["wheels"][0]
+                self.assertEqual(entry["status"], "yanked")
+                self.assertEqual(entry["yank_reason"], expected)
+                page = (site / "simple/tiktoken/index.html").read_text()
+                self.assertIn(f'data-yanked="{expected}"', page)
+
+    def test_status_json_withdrawn_when_pypi_has_matching_wheel(self):
+        filename = "tiktoken-0.14.0-cp314-cp314-win_arm64.whl"
+        site = self.build([wheel()], {"tiktoken": [pypi_file(filename)]})
+        entry = json.loads((site / "data/status.json").read_text())["wheels"][0]
+        self.assertEqual(entry["status"], "withdrawn-pypi-has-wheel")
+        self.assertIsNone(entry["yank_reason"])
+        self.assertNotIn("releases/download/gap-wheels/", (site / "simple/tiktoken/index.html").read_text())
+
+    def test_status_json_withdrawn_when_release_is_gone(self):
+        site = self.build([wheel()], sdists=False)
+        entry = json.loads((site / "data/status.json").read_text())["wheels"][0]
+        self.assertEqual(entry["status"], "withdrawn-release-gone")
+        self.assertIsNone(entry["yank_reason"])
+        self.assertNotIn("releases/download/gap-wheels/", (site / "simple/tiktoken/index.html").read_text())
+
+    def test_status_json_marks_unreadable_pypi_only_for_explicit_omit(self):
+        bad = pypi_file("tiktoken-0.14.0.tar.gz", url="https://untrusted.example/sdist.tar.gz")
+        site = self.build([wheel()], {"tiktoken": [bad]}, omit_failing=True)
+        entry = json.loads((site / "data/status.json").read_text())["wheels"][0]
+        self.assertEqual(entry["status"], "left-out-pypi-unreadable")
+        self.assertIsNone(entry["yank_reason"])
+        self.assertFalse((site / "simple/tiktoken").exists())
+        # The default failure path must not create a partial site or status.json.
+        site = self.build([wheel()], {"tiktoken": [bad]}, expect=1)
+        self.assertFalse(site.exists())
+        self.assertFalse((site / "data/status.json").exists())
+
+    def test_status_json_is_identical_for_identical_inputs(self):
+        wheels = [wheel()]
+        a = (self.build(wheels) / "data/status.json").read_bytes()
+        b = (self.build(wheels) / "data/status.json").read_bytes()
+        self.assertEqual(a, b)
+        self.assertTrue(a.endswith(b"\n"))
+        self.assertNotIn(b"generated_at", a)
+
+    def test_status_json_keeps_yank_reasons_across_projects(self):
+        wheels = [wheel(), wheel(name="lz4", file="lz4-4.4.5-cp314-cp314-win_arm64.whl", version="4.4.5")]
+        site = self.build(wheels, {"lz4": [pypi_file("lz4-4.4.5.tar.gz", yanked="bad build")]})
+        rows = {row["project"]: row for row in json.loads((site / "data/status.json").read_text())["wheels"]}
+        self.assertEqual((rows["lz4"]["status"], rows["lz4"]["yank_reason"]), ("yanked", "bad build"))
+        self.assertEqual((rows["tiktoken"]["status"], rows["tiktoken"]["yank_reason"]), ("in-index", None))
+
+    def test_status_json_nulls_version_and_target_that_arent_strings(self):
+        odd = wheel(target=3)
+        del odd["version"]
+        site = self.build([odd])
+        row = json.loads((site / "data/status.json").read_text())["wheels"][0]
+        self.assertEqual((row["version"], row["target"], row["status"]), (None, None, "in-index"))
+
+    def test_status_json_omits_entries_the_index_rejects(self):
+        site = self.build([wheel(), wheel(name="../unsafe"), wheel(sha256="invalid")])
+        rows = json.loads((site / "data/status.json").read_text())["wheels"]
+        self.assertEqual([row["wheel"] for row in rows], [wheel()["wheel"]])
 
 
 class Requests(Index):

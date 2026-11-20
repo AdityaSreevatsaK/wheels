@@ -5,7 +5,8 @@
 Writes <site>/simple/index.html (every project), <site>/simple/<project>/index.html, <site>/index.html (what the index
 is, how to use it with pip and uv, how the wheels are made and how a project opts out; each package's rows have an
 anchor, #<project>, and say who asked for it when data/gap-wheel-requests.json names someone) and
-<site>/data/gap-wheels.json (the transparency record). gap_wheels.py publish writes the JSON. Plain HTML, no JavaScript. The site is
+<site>/data/gap-wheels.json (the transparency record), and <site>/data/status.json (the current installability
+state of each recorded wheel). gap_wheels.py publish writes the raw JSON. Plain HTML, no JavaScript. The site is
 wheelgap.github.io/wheels/; it shares wheelgap.github.io with the tracker, whose stylesheet it uses.
 
 Each project page lists every file PyPI lists for that project (read from PyPI's JSON simple API, linked to
@@ -331,20 +332,40 @@ def human_page(
         )
         for n, w in enumerate(wheels):
             builds = [u for u in w.get("builds") or [] if isinstance(u, str) and u.startswith("https://github.com/")]
-            links = ", ".join(f'<a href="{e(u)}">build {n}</a>' for n, u in enumerate(builds, 1))
+            links = ", ".join(
+                f'<a href="{e(u)}" aria-label="build {i} of {e(w["wheel"])}">build {i}</a>'
+                for i, u in enumerate(builds, 1)
+            )
             anchor = f' id="{e(project)}"' if n == 0 else ""
+            parsed = wheel_tags(w["wheel"])
+            filename_version = (
+                parsed[1]
+                if parsed is not None
+                and parsed[0] == project
+                and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.]*", parsed[1], re.ASCII)
+                else None
+            )
+            install = (
+                f"<code>pip install --extra-index-url {e(INDEX_URL)} {e(project)}=={e(filename_version)}</code>"
+                if w["wheel"] not in gone and filename_version is not None
+                else ""
+            )
             rows.append(
                 f'          <tr{anchor}><td><a href="{e(TRACKER)}p/{e(project)}/">{e(w["name"])}</a>{note}</td>'
                 f"<td>{e(str(w.get('version', '')))}</td><td>{e(str(w.get('target', '')))}</td>"
                 f"<td>{e(str(w.get('verified') or ''))}</td><td>{links}</td>"
-                f'<td><a href="{e(RELEASE_URL + w["wheel"])}">wheel</a></td>'
+                f'<td><a href="{e(RELEASE_URL + w["wheel"])}" aria-label="wheel {e(w["wheel"])}">wheel</a>'
+                f'<br><small title="{e(w["sha256"])}">{e(w["sha256"][:12])}</small></td>'
+                f"<td>{install}</td>"
                 f"<td>{e(gone.get(w['wheel'], 'in the index'))}</td></tr>"
             )
     count = sum(len(v) for v in by_project.values()) - len(gone)
+    # The heading's id has an underscore so no package row's id (a canonical name: a-z, 0-9 and -) can clash with it.
     table = (
-        '        <div class="matrix-scroll"><table class="matrix">\n'
-        "          <thead><tr><th>Package</th><th>Version</th><th>Target</th><th>Verified</th><th>Builds</th>"
-        "<th>File</th><th>Status</th></tr></thead>\n"
+        '        <div class="matrix-scroll" tabindex="0" role="region" aria-labelledby="published_wheels"><table class="matrix">\n'
+        '          <thead><tr><th scope="col">Package</th><th scope="col">Version</th>'
+        '<th scope="col">Target</th><th scope="col">Verified</th><th scope="col">Builds</th>'
+        '<th scope="col">File</th><th scope="col">Install</th><th scope="col">Status</th></tr></thead>\n'
         "          <tbody>\n" + "\n".join(rows) + "\n          </tbody>\n"
         "        </table></div>\n"
         if rows
@@ -396,17 +417,17 @@ tokenizers = {{ index = "wheelgap" }}</code></pre>
         <li>On Linux, built in a pinned manylinux_2_28 or Alpine image and repaired there with a pinned auditwheel, which bundles the libraries it needs. It only goes up if every other library it links against is on that platform's standard list (and, for glibc, nothing newer than glibc 2.28), and it's install-tested in a minimal container, not on a build machine.</li>
         <li>Installed and imported on a fresh machine before it goes up. On free-threaded Python the GIL has to stay off. This checks that it works, it's not a security check.</li>
         <li>pip checks each file's hash when it downloads it. You can also check where a file came from with <code>gh attestation verify FILE.whl -R wheelgap/wheels</code>.</li>
-        <li>Every wheel, its source hash and both of its build runs are listed in <a href="data/gap-wheels.json">gap-wheels.json</a>.</li>
+        <li>Every wheel, its source hash and both build runs are listed in <a href="data/gap-wheels.json">gap-wheels.json</a>; the machine-readable <a href="data/status.json">status.json</a> shows which ones are currently in the index, yanked or withdrawn.</li>
       </ul>
       <p>One thing to know: a wheel here is only as safe as the source it was built from. Installing the package the normal way runs the same code. Only packages with an OSI-approved licence (or the PSF licence Python uses) go up. Some Windows wheels also carry Microsoft's Visual C++ runtime DLLs (in a <code>.libs</code> folder), redistributed under Visual Studio's terms, as many wheels on PyPI do.</p>
-      <p>The platforms: Windows on ARM for Python 3.14 and 3.14t, Windows x64 for Python 3.15, Linux x86_64 (glibc 2.28 or newer: <code>manylinux_2_28</code>) for Python 3.14t and 3.15, and Alpine Linux on ARM (<code>musllinux_1_2</code>) for Python 3.14. Linux wheels go up only once a maintainer approves a publish run that includes them; the table below shows which are here.</p>
+      <p>The platforms: Windows on ARM for Python 3.14 and 3.14t, Windows x64 for Python 3.15, Linux x86_64 (glibc 2.28 or newer: <code>manylinux_2_28</code>) for Python 3.14t and 3.15, and Alpine Linux on ARM (<code>musllinux_1_2</code>) for Python 3.14. Every wheel goes up only after a maintainer approves a publish run that includes it; the table below shows which are here.</p>
     </section>
     <section>
       <h2>If it's your package</h2>
       <p>These are meant as a stopgap until your release ships its own wheel. Once it does, ours drops out of the index within the hour, and the table below says so. If you'd rather we didn't host any wheels for your project, <a href="{e(OPT_OUT_URL)}">open an opt-out issue</a> and they come down, and later batches skip it. Each row below links to both build runs if you want to see the build that worked.</p>
     </section>
     <section>
-      <h2>Published wheels</h2>
+      <h2 id="published_wheels">Published wheels</h2>
 {table}    </section>
   </main>
 </body>
@@ -425,6 +446,8 @@ def build(
     by_project = projects(wheels)
     pages: dict[str, list[str]] = {}
     gone: dict[str, str] = {}
+    status: dict[str, str] = {}
+    yanked: dict[str, str] = {}
     for project in by_project:
         try:
             files = [pypi_link(f) for f in fetch(project)]
@@ -435,20 +458,23 @@ def build(
             print(f"::warning::gap wheels: {project} left out of the index, PyPI's list can't be used: {exc}")
             for w in by_project[project]:
                 gone[w["wheel"]] = "left out for now: PyPI couldn't be read"
+                status[w["wheel"]] = "left-out-pypi-unreadable"
             continue
         listed = {name: link for name, link, _ in files}
         names_yanks = [(name, reason) for name, _, reason in files]
-        yanked: dict[str, str] = {}
         kept = []
         for w in by_project[project]:
             mine = wheel_tags(w["wheel"])
             on_pypi, reason = release_yank(mine[1], project, names_yanks) if mine else (False, None)
             if not on_pypi:
                 gone[w["wheel"]] = "withdrawn: the release isn't on PyPI"
+                status[w["wheel"]] = "withdrawn-release-gone"
             elif withdrawn(w["wheel"], set(listed)):
                 gone[w["wheel"]] = "withdrawn: PyPI has its own now"
+                status[w["wheel"]] = "withdrawn-pypi-has-wheel"
             else:
                 kept.append(w)
+                status[w["wheel"]] = "yanked" if reason is not None else "in-index"
                 if reason is not None:
                     yanked[w["wheel"]] = reason
         ours_links = dict(zip((w["wheel"] for w in kept), project_links(kept, yanked), strict=True))
@@ -464,6 +490,30 @@ def build(
     (site / "index.html").write_text(human_page(by_project, gone, requests), encoding="utf-8")
     (site / "data").mkdir(exist_ok=True)
     (site / "data" / "gap-wheels.json").write_text(json.dumps(data, indent=1) + "\n", encoding="utf-8")
+    # Each status is set where build() decides it, never parsed back out of `gone`'s text. `usable` doesn't check
+    # `version` or `target`, so anything but a string is null rather than a KeyError that would stop a takedown.
+    wheel_status = {
+        "schema": 1,
+        "index": INDEX_URL,
+        "wheels": sorted(
+            (
+                {
+                    "project": project,
+                    "version": w["version"] if isinstance(w.get("version"), str) else None,
+                    "target": w["target"] if isinstance(w.get("target"), str) else None,
+                    "wheel": w["wheel"],
+                    "sha256": w["sha256"],
+                    "url": RELEASE_URL + w["wheel"],
+                    "status": status[w["wheel"]],
+                    "yank_reason": yanked.get(w["wheel"]),
+                }
+                for project, records in by_project.items()
+                for w in records
+            ),
+            key=lambda row: (row["project"], row["wheel"]),
+        ),
+    }
+    (site / "data" / "status.json").write_text(json.dumps(wheel_status, indent=1) + "\n", encoding="utf-8")
     listed_count = sum(1 for p in pages for w in by_project[p] if w["wheel"] not in gone)
     print(f"gap wheels: {listed_count} wheels of {len(pages)} projects listed, {len(gone)} withdrawn")
     for name, why in sorted(gone.items()):
